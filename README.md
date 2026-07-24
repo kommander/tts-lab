@@ -1,78 +1,69 @@
-# Local TTS Lab
+# TTS Lab
 
-A small SolidJS terminal application for installing and trying five local TTS engines. The interface is rendered by OpenTUI and generated WAV files are played with OpenTUI's native `Audio` API.
+A local workbench for installing, comparing, and actually using open text-to-speech models. Choose a model and voice, generate speech, compare cold and warm latency, watch the live spectrum, and save the result as WAV.
+
+## What It Does
+
+- Runs Kokoro, Piper, MeloTTS, Parler-TTS, and F5-TTS through one consistent workflow.
+- Exposes model-specific voices, accents, and named speakers.
+- Installs every engine in an isolated Python environment.
+- Downloads pinned model assets with resume support, progress reporting, and checksum verification.
+- Keeps one model hot for meaningful warm-inference measurements without exhausting memory.
+- Plays generated audio locally with a live FFT spectrum.
+- Exports the latest generated audio through a simple path dialog.
+
+## Requirements
+
+- Bun 1.3+
+- Python 3.8+ to bootstrap the app-local `uv` installation
+- Git for MeloTTS and Parler-TTS packages
+- FFmpeg on `PATH` for F5-TTS
+- Internet access during model setup
 
 ## Run
-
-Requirements:
-
-- Bun 1.3 or newer
-- Python 3.8 or newer, used only to bootstrap the app-local `uv` executable
-- Git, required by MeloTTS and Parler-TTS upstream packages
-- FFmpeg on `PATH` for F5-TTS
-- Internet access while setting up a model
 
 ```bash
 bun install
 bun start
 ```
 
-No global Python packages are installed. The app installs `uv==0.11.32` under `.tts-lab/tools/`, then creates an isolated Python environment for each model. `uv` downloads Python 3.9, 3.11, or 3.12 when the requested interpreter is not already available.
-
-Set `TTS_LAB_HOME` to store environments and weights somewhere other than `.tts-lab`:
+Everything is stored under `.tts-lab/`; no global Python packages are installed. To use another location:
 
 ```bash
 TTS_LAB_HOME=/path/with/free/space bun start
 ```
 
+Installing every model can require more than 15 GB because each model has an isolated runtime.
+
 ## Controls
 
 | Key | Action |
 |---|---|
-| `Left` / `Right` | Browse models while the model rack is focused |
-| `Enter` | Confirm a model |
-| `Tab` / `Shift+Tab` | Move focus among the model rack, voice list, and editor |
-| `Up` / `Down`, then `Enter` | Choose a voice while the voice list is focused |
-| `Ctrl+G` | Generate and play the editor text |
-| `F2` | Save the latest generated WAV to a chosen path |
-| `Ctrl+R` | Retry the selected model after a setup error |
-| `Escape` | Exit and restore the terminal |
+| `Left` / `Right` | Browse models |
+| `Up` / `Down`, `Enter` | Choose a voice |
+| `Tab` / `Shift+Tab` | Move focus |
+| `Ctrl+G` | Generate and play speech |
+| `F2` | Save the latest WAV |
+| `Ctrl+R` | Retry failed setup |
+| `Escape` | Exit or close the save dialog |
 
-Selecting a model immediately starts its setup if needed. Model switching remains available while setup or synthesis is in progress. Setups are isolated, so more than one model can be downloading at once. Synthesis itself is serialized to avoid loading multiple large models into memory simultaneously.
+## Models
 
-`F2` opens a small path dialog prefilled with the current working directory and a random filename. The app preserves the generated format, creates missing parent directories, and does not overwrite existing files.
+| Model | Profile | License notes |
+|---|---|---|
+| Kokoro-82M | 28 English voices; CPU, CUDA, or MPS | Apache-2.0 weights |
+| Piper | Three US English medium voices; CPU-first | GPL-3.0+ runtime; selected voices have non-commercial or research terms |
+| MeloTTS | Five English accents | MIT model and code |
+| Parler-TTS Mini v1.1 | 34 named, prompt-directed speakers | Apache-2.0 |
+| F5-TTS v1 Base | Packaged reference voice; CUDA, XPU, MPS, or CPU | MIT code; CC-BY-NC-4.0 weights |
 
-Voice choices are model-aware. Kokoro exposes its 28 English voices, MeloTTS exposes five English accents, and Parler-TTS exposes all 34 named speakers from the official checkpoint. Piper includes Lessac plus HFC female and male medium voices; alternate Piper voices download their own 63 MB ONNX file when first selected. F5-TTS currently exposes its single packaged Nature reference profile because additional F5 voices require reference audio and an exact transcript rather than a speaker ID.
+F5-TTS is reference-conditioned rather than speaker-ID based. TTS Lab uses its packaged demo reference and transcript. All engines currently produce WAV output.
 
-## Integrations
+Model, dataset, and voice licenses remain separate from this repository's license. Review them before commercial use or voice replication.
 
-| Model | Runtime and checkpoint | Demo voice | Important note |
-|---|---|---|---|
-| Kokoro | `kokoro==0.9.4`, `hexgrad/Kokoro-82M` pinned at `f3ff357` | `af_heart`, American English | Apache-2.0 weights. Uses Python 3.11. |
-| Piper | `piper-tts==1.6.0`, `en_US-lessac-medium` at voice revision `v1.0.0` | Lessac medium | Uses the current Open Home Foundation GPL successor. The selected Lessac voice links to research-only source-data terms. |
-| MeloTTS | Source commit `2091453`, English v1 checkpoint pinned at `bb4fb73` | `EN-US` | Uses the officially documented Python 3.9 path. English BERT and NLTK data are provisioned during setup instead of on first speech. |
-| Parler-TTS | Source commit `d108732`, Mini v1.1 pinned at `fbb2dd2` | Jon style prompt | 0.9B FP32 model. Both the prompt tokenizer and FLAN description tokenizer are downloaded locally. |
-| F5-TTS | `f5-tts==1.1.22`, v1 Base pinned at `84e5a41` | Packaged Nature demo reference | F5 is reference-conditioned, not plain text-only TTS. The app uses the package's official reference WAV and exact transcript. Pretrained weights are CC-BY-NC-4.0. |
+## OpenTUI
 
-The displayed byte progress covers pinned model assets, with resumable HTTP range downloads and SHA-256 verification for large files. Python wheels, managed Python interpreters, spaCy, NLTK, and other package resources are shown by the separate environment setup bar because their installers do not expose a stable byte-level API.
-
-Expect substantial disk use. Installing every model duplicates incompatible PyTorch stacks across environments and can require well over 15 GB in addition to the displayed model assets.
-
-## Cold And Warm Latency
-
-Model setup downloads files and creates the environment, but it does not allocate the model in RAM or VRAM. The first speech request starts a Python worker and loads the selected model. That worker remains alive, so later requests for the same model measure warm inference without reloading weights.
-
-The Signal panel reports model-load, synthesis, and OpenTUI playback-start times and shows whether the worker is hot. Only one model worker is retained at a time to avoid exhausting memory. Selecting another model does not evict the worker, but speaking with another model stops the previous worker before loading the new one.
-
-## Hardware
-
-- Piper is CPU-only and is the lightest option.
-- Kokoro runs on CUDA, MPS, or CPU according to the installed PyTorch capabilities.
-- MeloTTS uses CPU for the acoustic model. Its pinned upstream English BERT helper may select MPS on macOS.
-- Parler-TTS selects CUDA or MPS when available, otherwise CPU. On Apple Silicon, autoregressive generation stays on MPS while DAC audio decoding runs on CPU to avoid MPS convolution limits.
-- F5-TTS uses its official automatic order: CUDA, Intel XPU, MPS, then CPU.
-
-The default PyTorch packages come from PyPI. Systems needing a particular CUDA, ROCm, or Intel XPU build should install the matching official PyTorch build into that model's environment before running synthesis.
+TTS Lab uses `@opentui/core` for responsive terminal layout and native audio, `@opentui/keymap` for commands, and the audio tap API with `fft.js` for spectrum analysis. Setup and inference logs are written to `.tts-lab/logs/<model>.log`.
 
 ## Development
 
@@ -82,15 +73,8 @@ bun test
 python3 -m py_compile src/python/infer.py
 ```
 
-Tests use OpenTUI's Solid `testRender` utility and do not download model weights. Full model setup is intentionally an interactive smoke test because the complete matrix is multi-gigabyte and hardware-specific.
+Tests are headless and do not download model weights. Hardware-specific model setup remains an interactive smoke test.
 
-## Troubleshooting
+## License
 
-- F5-TTS setup stops immediately if `ffmpeg -version` is unavailable.
-- An interrupted model file remains as `*.part` and resumes when the model is selected again.
-- Press `Ctrl+R` after correcting a setup error.
-- Setup and inference command logs are appended to `.tts-lab/logs/<model>.log`.
-- Delete one model directory under `.tts-lab/models/` to force a clean reinstall of only that model.
-- OpenTUI local playback supports WAV, MP3, and FLAC. This app writes WAV for every engine.
-
-Model licenses do not grant rights to clone or deploy a person's voice. Review the selected checkpoint, dataset, and voice terms before any non-demo use.
+TTS Lab is MIT licensed. See `LICENSE`.

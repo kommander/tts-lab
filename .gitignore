@@ -11,5 +11,6 @@ coverage/
 .venv/
 venv/
 *.log
+*.wav
 __pycache__/
 *.pyc
