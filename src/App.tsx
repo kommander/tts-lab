@@ -71,14 +71,13 @@ export function buildSpectrumRows(levels: readonly number[], barCount: number, r
   })
 }
 
-function Spectrum(props: { levels: number[]; compact: boolean }) {
-  const rowCount = () => (props.compact ? 3 : 5)
-  const rows = createMemo(() => buildSpectrumRows(props.levels, 12, rowCount()))
+function Spectrum(props: { levels: number[]; rowCount: number }) {
+  const rows = createMemo(() => buildSpectrumRows(props.levels, 12, props.rowCount))
   const active = createMemo(() => props.levels.some((level) => level > 0.03))
   const colors = [COLORS.pink, COLORS.amber, COLORS.green, COLORS.cyan, COLORS.cyan]
   return (
     <box
-      height={rowCount() + 2}
+      height={props.rowCount + 2}
       flexShrink={0}
       flexDirection="column"
       border
@@ -135,6 +134,12 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const progressWidth = createMemo(() => {
     const panelWidth = stacked() ? dimensions().width : dimensions().width * (dimensions().width < 118 ? 0.38 : 0.32)
     return Math.max(10, Math.min(28, Math.floor(panelWidth - 12)))
+  })
+  const spectrumRowCount = createMemo(() => {
+    if (stacked()) return 5
+    if (dimensions().height < 24) return 3
+    if (dimensions().height < 30) return 5
+    return 7
   })
   const keyHints = createMemo(() =>
     veryNarrow()
@@ -474,7 +479,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
               <box flexGrow={1} />
             </box>
           </box>
-          <Spectrum levels={spectrum()} compact={compact()} />
+          <Spectrum levels={spectrum()} rowCount={spectrumRowCount()} />
         </box>
       </box>
 

@@ -126,6 +126,10 @@ test.each([
   expect(frame).not.toContain("five engines · private inference · native playback")
   expect(frame.match(/┌/g)?.length).toBeGreaterThanOrEqual(3)
   expect(frame.match(/└/g)?.length).toBeGreaterThanOrEqual(3)
+  const expectedSpectrumRows = width === 160 ? 7 : 5
+  expect(frame.split("\n").filter((line) => line.includes("· · · ·")).length).toBeGreaterThanOrEqual(
+    expectedSpectrumRows,
+  )
 })
 
 test("builds compact spectrum rows from normalized levels", () => {
