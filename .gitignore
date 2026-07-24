@@ -1,0 +1,15 @@
+node_modules/
+.tts-lab/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+.venv/
+venv/
+*.log
+__pycache__/
+*.pyc
