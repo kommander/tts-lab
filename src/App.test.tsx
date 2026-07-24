@@ -43,8 +43,8 @@ class FakeController implements DemoController {
 
 afterEach(() => renderer?.renderer.destroy())
 
-async function renderApp(controller: DemoController) {
-  renderer = await createTestRenderer({ width: 120, height: 32 })
+async function renderApp(controller: DemoController, width = 120, height = 32) {
+  renderer = await createTestRenderer({ width, height })
   const keymap = createDefaultOpenTuiKeymap(renderer.renderer)
   await render(() => <App controller={controller} keymap={keymap} />, renderer.renderer)
   return renderer
@@ -55,8 +55,14 @@ test("renders every model and the editor", async () => {
   await renderer.renderOnce()
   const frame = renderer.captureCharFrame()
   for (const model of MODELS) expect(frame).toContain(model.name)
-  expect(frame).toContain("SPEAK WITH KOKORO")
+  expect(frame).toContain("MODELS")
+  expect(frame).toContain("COMPOSE / KOKORO")
   expect(frame).toContain("CTRL+G")
+  expect(frame.match(/┌/g)?.length).toBeGreaterThanOrEqual(3)
+  expect(frame.match(/└/g)?.length).toBeGreaterThanOrEqual(3)
+  expect(frame).toContain("││")
+  const editorLine = frame.split("\n").find((line) => line.includes("Local speech should be simple"))
+  expect(editorLine).toContain("││")
 })
 
 test("speaks through the Ctrl+G keymap binding", async () => {
@@ -84,4 +90,20 @@ test("defines model-specific voice catalogs", () => {
   expect(MODEL_BY_ID.melo.voices).toHaveLength(5)
   expect(MODEL_BY_ID.parler.voices).toHaveLength(34)
   expect(MODEL_BY_ID.f5.voices).toHaveLength(1)
+})
+
+test.each([
+  [72, 40],
+  [80, 24],
+  [160, 45],
+])("renders responsive dashboard at %ix%i", async (width, height) => {
+  renderer = await renderApp(new FakeController(), width, height)
+  await renderer.renderOnce()
+  const frame = renderer.captureCharFrame()
+  expect(frame).toContain("TTS LAB")
+  expect(frame).toContain("COMPOSE / KOKORO")
+  expect(frame).toContain("RUNTIME SIGNAL")
+  expect(frame).toContain("CTRL+G")
+  expect(frame.match(/┌/g)?.length).toBeGreaterThanOrEqual(3)
+  expect(frame.match(/└/g)?.length).toBeGreaterThanOrEqual(3)
 })

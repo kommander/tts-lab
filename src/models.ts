@@ -114,7 +114,7 @@ export const MODELS: readonly ModelDefinition[] = [
     id: "kokoro",
     name: "Kokoro",
     tagline: "Small, modern all-rounder",
-    footprint: "~328 MB weights",
+    footprint: "82M parameters · ~328 MB weights",
     license: "Apache-2.0",
     python: "3.11",
     packages: ["kokoro==0.9.4", "soundfile"],
@@ -122,7 +122,7 @@ export const MODELS: readonly ModelDefinition[] = [
     voices: kokoroVoices,
     defaultVoiceId: "af_heart",
     setupVersion: "kokoro-0.9.4-v2",
-    note: "82M parameters. The published package supports Python 3.10-3.12.",
+    note: "The published package supports Python 3.10-3.12.",
     assets: [
       {
         path: "config.json",
