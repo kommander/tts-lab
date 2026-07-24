@@ -34,10 +34,13 @@ TTS_LAB_HOME=/path/with/free/space bun start
 | `Tab` / `Shift+Tab` | Move focus among the model rack, voice list, and editor |
 | `Up` / `Down`, then `Enter` | Choose a voice while the voice list is focused |
 | `Ctrl+G` | Generate and play the editor text |
+| `F2` | Save the latest generated WAV to a chosen path |
 | `Ctrl+R` | Retry the selected model after a setup error |
 | `Escape` | Exit and restore the terminal |
 
 Selecting a model immediately starts its setup if needed. Model switching remains available while setup or synthesis is in progress. Setups are isolated, so more than one model can be downloading at once. Synthesis itself is serialized to avoid loading multiple large models into memory simultaneously.
+
+`F2` opens a small path dialog prefilled with the current working directory and a random filename. The app preserves the generated format, creates missing parent directories, and does not overwrite existing files.
 
 Voice choices are model-aware. Kokoro exposes its 28 English voices, MeloTTS exposes five English accents, and Parler-TTS exposes all 34 named speakers from the official checkpoint. Piper includes Lessac plus HFC female and male medium voices; alternate Piper voices download their own 63 MB ONNX file when first selected. F5-TTS currently exposes its single packaged Nature reference profile because additional F5 voices require reference audio and an exact transcript rather than a speaker ID.
 

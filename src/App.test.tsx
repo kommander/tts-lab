@@ -7,6 +7,7 @@ import { MODEL_BY_ID, MODELS } from "./models.js"
 import type { DemoController, ModelId, ModelState } from "./types.js"
 
 let renderer: Awaited<ReturnType<typeof createTestRenderer>> | undefined
+let appKeymap: ReturnType<typeof createDefaultOpenTuiKeymap> | undefined
 
 function state(id: ModelId): ModelState {
   return {
@@ -27,6 +28,7 @@ class FakeController implements DemoController {
   constructor(private readonly initial?: Record<ModelId, ModelState>) {}
   speakCount = 0
   voiceSelections: Array<{ model: ModelId; voiceId: string }> = []
+  savedPaths: string[] = []
   snapshot = () =>
     this.initial ?? (Object.fromEntries(MODELS.map(({ id }) => [id, state(id)])) as Record<ModelId, ModelState>)
   subscribe = () => () => undefined
@@ -34,6 +36,11 @@ class FakeController implements DemoController {
   subscribeSpectrum = (listener: (levels: number[]) => void) => {
     listener(this.getSpectrum())
     return () => undefined
+  }
+  getLatestAudio = () => ({ model: "kokoro" as const, voiceId: "af_heart", format: "wav" as const })
+  saveLatestAudio = async (path: string) => {
+    this.savedPaths.push(path)
+    return path
   }
   ensure = async () => undefined
   setVoice = async (model: ModelId, voiceId: string) => {
@@ -51,6 +58,7 @@ afterEach(() => renderer?.renderer.destroy())
 async function renderApp(controller: DemoController, width = 120, height = 32) {
   renderer = await createTestRenderer({ width, height })
   const keymap = createDefaultOpenTuiKeymap(renderer.renderer)
+  appKeymap = keymap
   await render(() => <App controller={controller} keymap={keymap} />, renderer.renderer)
   return renderer
 }
@@ -86,6 +94,7 @@ test("renders every model and the editor", async () => {
 test("speaks through the Ctrl+G keymap binding", async () => {
   const controller = new FakeController()
   renderer = await renderApp(controller)
+  expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).toContain("f2")
   expect(SPEAK_BINDING).toBe("ctrl+g")
   renderer.mockInput.pressTab()
   await renderer.flush()
@@ -139,4 +148,18 @@ test("builds compact spectrum rows from normalized levels", () => {
     "· █ █ ·",
     "· █ █ █",
   ])
+})
+
+test("opens the save dialog with a generated WAV path", async () => {
+  const controller = new FakeController()
+  renderer = await renderApp(controller)
+  expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).toContain("f2")
+  const saveResult = await appKeymap?.runCommand("audio.save.open")
+  expect(saveResult?.ok).toBe(true)
+  const submitResult = await appKeymap?.runCommand("audio.save.submit")
+  expect(submitResult?.ok).toBe(true)
+  await Bun.sleep(0)
+  expect(controller.savedPaths).toHaveLength(1)
+  expect(controller.savedPaths[0]).toStartWith(process.cwd())
+  expect(controller.savedPaths[0]).toEndWith(".wav")
 })

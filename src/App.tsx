@@ -1,4 +1,6 @@
-import type { KeyEvent, Renderable, TabSelectRenderable, TextareaRenderable } from "@opentui/core"
+import { randomUUID } from "node:crypto"
+import { join } from "node:path"
+import type { InputRenderable, KeyEvent, Renderable, TabSelectRenderable, TextareaRenderable } from "@opentui/core"
 import type { Keymap } from "@opentui/keymap"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js"
@@ -143,9 +145,15 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   })
   const keyHints = createMemo(() =>
     veryNarrow()
-      ? `TAB focus  ${speakKeyLabel} speak`
-      : `TAB focus  ${speakKeyLabel} speak  CTRL+R retry  ESC quit`,
+      ? `${speakKeyLabel} speak  F2 save`
+      : `TAB focus  ${speakKeyLabel} speak  F2 save  CTRL+R retry  ESC quit`,
   )
+  const dialogWidth = createMemo(() => Math.max(24, Math.min(76, dimensions().width - 4)))
+  const [saveDialogOpen, setSaveDialogOpen] = createSignal(false)
+  const [savePath, setSavePath] = createSignal("")
+  const [saveError, setSaveError] = createSignal("")
+  const [saving, setSaving] = createSignal(false)
+  let saveInput: InputRenderable | undefined
   const options = createMemo(() =>
     MODELS.map((model) => ({
       name: `${states()[model.id].installed ? "+" : states()[model.id].phase === "error" ? "!" : " "} ${model.name}`,
@@ -182,7 +190,37 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
     void props.controller.speak(selected(), text()).catch(() => undefined)
   }
 
+  const openSaveDialog = () => {
+    const latest = props.controller.getLatestAudio()
+    const format = latest?.format ?? "wav"
+    const model = latest?.model ?? selected()
+    setSavePath(join(process.cwd(), `tts-${model}-${randomUUID().slice(0, 8)}.${format}`))
+    setSaveError(latest ? "" : "Generate audio before saving it")
+    setSaveDialogOpen(true)
+    queueMicrotask(() => saveInput?.focus())
+  }
+
+  const closeSaveDialog = () => {
+    setSaveDialogOpen(false)
+    setSaveError("")
+    setSaving(false)
+    setFocus("editor")
+    queueMicrotask(() => editor?.focus())
+  }
+
+  const saveAudio = () => {
+    if (saving()) return
+    setSaving(true)
+    setSaveError("")
+    void props.controller
+      .saveLatestAudio(savePath())
+      .then(() => closeSaveDialog())
+      .catch((error) => setSaveError(error instanceof Error ? error.message : String(error)))
+      .finally(() => setSaving(false))
+  }
+
   const disposeBindings = props.keymap.registerLayer({
+    enabled: () => !saveDialogOpen(),
     commands: [
       {
         name: "app.quit",
@@ -219,6 +257,13 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           void props.controller.retry(selected()).catch(() => undefined)
         },
       },
+      {
+        name: "audio.save.open",
+        desc: "Save the latest generated audio",
+        run() {
+          openSaveDialog()
+        },
+      },
     ],
     bindings: [
       { key: "escape", cmd: "app.quit" },
@@ -226,10 +271,36 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
       { key: "tab", cmd: "app.focus-next" },
       { key: "shift+tab", cmd: "app.focus-previous" },
       { key: SPEAK_BINDING, cmd: "tts.speak" },
+      { key: { name: "f2" }, cmd: "audio.save.open" },
       { key: "ctrl+r", cmd: "model.retry" },
     ],
   })
-  onCleanup(disposeBindings)
+  const disposeSaveBindings = props.keymap.registerLayer({
+    enabled: () => saveDialogOpen(),
+    priority: 100,
+    commands: [
+      {
+        name: "audio.save.close",
+        run() {
+          closeSaveDialog()
+        },
+      },
+      {
+        name: "audio.save.submit",
+        run() {
+          saveAudio()
+        },
+      },
+    ],
+    bindings: [
+      { key: "escape", cmd: "audio.save.close" },
+      { key: "return", cmd: "audio.save.submit" },
+    ],
+  })
+  onCleanup(() => {
+    disposeBindings()
+    disposeSaveBindings()
+  })
 
   onMount(() => {
     const unsubscribe = props.controller.subscribe((next) => {
@@ -481,6 +552,46 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           </box>
           <Spectrum levels={spectrum()} rowCount={spectrumRowCount()} />
         </box>
+      </box>
+
+      <box
+        position="absolute"
+        left="50%"
+        top="50%"
+        width={dialogWidth()}
+        height={7}
+        marginLeft={-Math.floor(dialogWidth() / 2)}
+        marginTop={-3}
+        zIndex={100}
+        visible={saveDialogOpen()}
+        flexDirection="column"
+        border
+        borderStyle="single"
+        borderColor={saveError() ? COLORS.red : COLORS.cyan}
+        title=" SAVE AUDIO "
+        titleColor={saveError() ? COLORS.red : COLORS.cyan}
+        titleAlignment="center"
+        paddingX={1}
+        backgroundColor={COLORS.background}
+      >
+        <text fg={COLORS.muted} flexShrink={0}>Enter save · Esc cancel</text>
+        <input
+          ref={(value) => (saveInput = value)}
+          focused={saveDialogOpen()}
+          value={savePath()}
+          onInput={setSavePath}
+          onSubmit={saveAudio}
+          width="100%"
+          backgroundColor={COLORS.background}
+          focusedBackgroundColor={COLORS.background}
+          textColor={COLORS.ink}
+          focusedTextColor={COLORS.ink}
+          cursorColor={COLORS.pink}
+          placeholder="/path/to/audio.wav"
+        />
+        <text fg={saveError() ? COLORS.red : COLORS.muted} wrapMode="word" flexShrink={0}>
+          {saveError() || (saving() ? "Saving..." : "Existing files are not overwritten")}
+        </text>
       </box>
 
     </box>

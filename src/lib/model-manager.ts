@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto"
-import { appendFile, mkdir, readFile, rm, stat } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { constants } from "node:fs"
+import { appendFile, copyFile, mkdir, readFile, rm, stat } from "node:fs/promises"
+import { dirname, extname, join, resolve } from "node:path"
 import { AudioPlayer } from "./audio-player.js"
 import { downloadAssets } from "./download.js"
 import { commandExists, runProcess } from "./process.js"
 import { TtsWorker, type WorkerStatusEvent } from "./tts-worker.js"
 import { MODEL_BY_ID, MODELS, type ModelDefinition } from "../models.js"
-import type { DemoController, ModelId, ModelState } from "../types.js"
+import type { DemoController, LatestAudio, ModelId, ModelState } from "../types.js"
 
 const PROJECT_ROOT = resolve(import.meta.dir, "../..")
 const APP_HOME = resolve(Bun.env.TTS_LAB_HOME ?? join(PROJECT_ROOT, ".tts-lab"))
@@ -14,6 +15,26 @@ const UV_VERSION = "0.11.32"
 
 function formatDuration(milliseconds: number): string {
   return milliseconds < 1000 ? `${Math.round(milliseconds)}ms` : `${(milliseconds / 1000).toFixed(2)}s`
+}
+
+export function normalizeAudioExportPath(path: string, format: "wav"): string {
+  const requested = path.trim()
+  if (!requested) throw new Error("Enter a destination path")
+  const expectedExtension = `.${format}`
+  const currentExtension = extname(requested)
+  const normalized = currentExtension.toLowerCase() === expectedExtension
+    ? requested
+    : currentExtension
+      ? `${requested.slice(0, -currentExtension.length)}${expectedExtension}`
+      : `${requested}${expectedExtension}`
+  return resolve(normalized)
+}
+
+export async function copyAudioExport(source: string, path: string, format: "wav"): Promise<string> {
+  const destination = normalizeAudioExportPath(path, format)
+  await mkdir(dirname(destination), { recursive: true })
+  await copyFile(source, destination, constants.COPYFILE_EXCL)
+  return destination
 }
 
 const freshState = (id: ModelId): ModelState => ({
@@ -62,6 +83,7 @@ export class ModelManager implements DemoController {
   private activeAudioModel?: ModelId
   private activeWorker?: { id: ModelId; worker: TtsWorker; loadMs: number }
   private startingWorker?: TtsWorker
+  private latestAudio?: LatestAudio & { path: string }
 
   constructor() {
     this.audio.onError((message) => {
@@ -88,6 +110,17 @@ export class ModelManager implements DemoController {
 
   subscribeSpectrum(listener: (levels: number[]) => void): () => void {
     return this.audio.subscribeSpectrum(listener)
+  }
+
+  getLatestAudio(): LatestAudio | null {
+    if (!this.latestAudio) return null
+    const { path: _path, ...latest } = this.latestAudio
+    return latest
+  }
+
+  async saveLatestAudio(path: string): Promise<string> {
+    if (!this.latestAudio) throw new Error("Generate audio before saving it")
+    return copyAudioExport(this.latestAudio.path, path, this.latestAudio.format)
   }
 
   async ensure(id: ModelId): Promise<void> {
@@ -165,7 +198,9 @@ export class ModelManager implements DemoController {
       const playbackStarted = performance.now()
       await this.audio.play(output)
       const playbackMs = performance.now() - playbackStarted
-      await rm(output, { force: true })
+      const previousOutput = this.latestAudio?.path
+      this.latestAudio = { path: output, model: id, voiceId, format: "wav" }
+      if (previousOutput && previousOutput !== output) await rm(previousOutput, { force: true })
       this.patch(id, {
         phase: "ready",
         detail: `${warm ? "Warm" : "Cold"} synth ${formatDuration(result.generationMs)}; playback ${formatDuration(playbackMs)}`,
@@ -193,6 +228,8 @@ export class ModelManager implements DemoController {
     this.activeWorker?.worker.dispose()
     this.activeWorker = undefined
     this.audio.dispose()
+    if (this.latestAudio) void rm(this.latestAudio.path, { force: true })
+    this.latestAudio = undefined
     this.listeners.clear()
   }
 

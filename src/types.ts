@@ -31,11 +31,19 @@ export interface ModelState {
   error?: string
 }
 
+export interface LatestAudio {
+  model: ModelId
+  voiceId: string
+  format: "wav"
+}
+
 export interface DemoController {
   snapshot(): Record<ModelId, ModelState>
   subscribe(listener: (state: ModelState) => void): () => void
   getSpectrum(): number[]
   subscribeSpectrum(listener: (levels: number[]) => void): () => void
+  getLatestAudio(): LatestAudio | null
+  saveLatestAudio(path: string): Promise<string>
   ensure(model: ModelId): Promise<void>
   setVoice(model: ModelId, voiceId: string): Promise<void>
   speak(model: ModelId, text: string): Promise<void>
