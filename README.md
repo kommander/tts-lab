@@ -65,6 +65,8 @@ Model, dataset, and voice licenses remain separate from this repository's licens
 
 TTS Lab uses `@opentui/core` for responsive terminal layout and native audio, `@opentui/keymap` for commands, and the audio tap API with `fft.js` for spectrum analysis. Setup and inference logs are written to `.tts-lab/logs/<model>.log`.
 
+The implementation was guided by the official [OpenTUI skill](https://skills.sh/anomalyco/opentui/opentui).
+
 ## Development
 
 ```bash
