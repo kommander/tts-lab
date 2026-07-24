@@ -18,6 +18,7 @@ function formatDuration(milliseconds: number): string {
 
 const freshState = (id: ModelId): ModelState => ({
   id,
+  voiceId: MODEL_BY_ID[id].defaultVoiceId,
   installed: false,
   phase: "idle",
   detail: "Not installed",
@@ -53,6 +54,7 @@ export class ModelManager implements DemoController {
   >
   private readonly listeners = new Set<(state: ModelState) => void>()
   private readonly installs = new Map<ModelId, Promise<void>>()
+  private readonly voiceDownloads = new Map<string, Promise<void>>()
   private readonly audio = new AudioPlayer()
   private controller = new AbortController()
   private uvInstall?: Promise<string>
@@ -98,6 +100,29 @@ export class ModelManager implements DemoController {
     await this.ensure(id)
   }
 
+  async setVoice(id: ModelId, voiceId: string): Promise<void> {
+    const model = MODEL_BY_ID[id]
+    const voice = model.voices.find((candidate) => candidate.id === voiceId)
+    if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
+    if (["generating", "playing"].includes(this.states[id].phase)) {
+      throw new Error(`Wait for the current ${model.name} synthesis to finish before changing voices`)
+    }
+    this.patch(id, { voiceId, lastLatency: undefined, error: undefined })
+    try {
+      await this.ensure(id)
+      await this.ensureVoice(id, voiceId)
+      if (this.states[id].voiceId === voiceId) {
+        this.patch(id, { phase: "ready", detail: `Voice ready: ${voice.name}` })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (this.states[id].voiceId === voiceId) {
+        this.patch(id, { phase: "error", detail: message, error: message })
+      }
+      throw error
+    }
+  }
+
   async speak(id: ModelId, text: string): Promise<void> {
     if (this.synthesis) throw new Error("Another synthesis is already running")
     const operation = this.synthesize(id, text)
@@ -111,6 +136,8 @@ export class ModelManager implements DemoController {
     const cleanText = text.trim()
     if (!cleanText) throw new Error("Enter some text first")
     await this.ensure(id)
+    const voiceId = this.states[id].voiceId
+    await this.ensureVoice(id, voiceId)
     const outputDir = join(APP_HOME, "output")
     await mkdir(outputDir, { recursive: true })
     const output = join(outputDir, `${id}-${randomUUID()}.wav`)
@@ -124,7 +151,7 @@ export class ModelManager implements DemoController {
     })
     try {
       const worker = await this.getWorker(id)
-      const result = await worker.worker.generate(cleanText, output)
+      const result = await worker.worker.generate(cleanText, output, voiceId)
       this.activeAudioModel = id
       this.patch(id, { phase: "playing", detail: "Starting OpenTUI audio", generationProgress: 1 })
       const playbackStarted = performance.now()
@@ -415,6 +442,54 @@ export class ModelManager implements DemoController {
       if (marker.version !== model.setupVersion || !(await exists(envPython(this.envDir(model.id))))) return false
       for (const asset of model.assets) {
         if ((await stat(join(this.assetDir(model.id), asset.path))).size !== asset.size) return false
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async ensureVoice(id: ModelId, voiceId: string): Promise<void> {
+    const model = MODEL_BY_ID[id]
+    const voice = model.voices.find((candidate) => candidate.id === voiceId)
+    if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
+    if (!voice.assets?.length || (await this.assetsExist(id, voice.assets))) return
+
+    const key = `${id}:${voiceId}`
+    const active = this.voiceDownloads.get(key)
+    if (active) return active
+    const operation = (async () => {
+      this.patch(id, {
+        phase: "download",
+        detail: `Downloading voice: ${voice.name}`,
+        downloadedBytes: 0,
+        totalBytes: voice.assets!.reduce((sum, asset) => sum + asset.size, 0),
+      })
+      await this.appendLog(id, `[app] Downloading voice ${voice.id}`)
+      await downloadAssets(
+        voice.assets!,
+        this.assetDir(id),
+        ({ asset, completedBytes, totalBytes }) => {
+          if (this.states[id].voiceId !== voiceId) return
+          this.patch(id, {
+            detail: `Downloading voice ${voice.name}: ${asset.path}`,
+            downloadedBytes: completedBytes,
+            totalBytes,
+          })
+        },
+        this.controller.signal,
+      )
+      await this.appendLog(id, `[app] Voice ready: ${voice.id}`)
+      if (this.states[id].voiceId === voiceId) this.markReady(id)
+    })().finally(() => this.voiceDownloads.delete(key))
+    this.voiceDownloads.set(key, operation)
+    return operation
+  }
+
+  private async assetsExist(id: ModelId, assets: readonly { path: string; size: number }[]): Promise<boolean> {
+    try {
+      for (const asset of assets) {
+        if ((await stat(join(this.assetDir(id), asset.path))).size !== asset.size) return false
       }
       return true
     } catch {

@@ -129,12 +129,18 @@ def load_kokoro(assets: Path):
         config=str(assets / "config.json"),
         model=str(assets / "kokoro-v1_0.pth"),
     ).to(device).eval()
-    pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", model=model)
-    voice = str(assets / "voices" / "af_heart.pt")
-    pipeline.load_voice(voice)
+    pipelines = {"a": KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", model=model)}
+    default_voice = str(assets / "voices" / "af_heart.pt")
+    pipelines["a"].load_voice(default_voice)
 
-    def synthesize(text: str, output: Path, request_id: str | None = None) -> None:
-        emit_request(request_id, "status", detail=f"Synthesizing with warm Kokoro on {device}")
+    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+        voice_id = voice_id or "af_heart"
+        lang_code = "b" if voice_id.startswith("b") else "a"
+        if lang_code not in pipelines:
+            pipelines[lang_code] = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", model=model)
+        pipeline = pipelines[lang_code]
+        voice = str(assets / "voices" / f"{voice_id}.pt")
+        emit_request(request_id, "status", detail=f"Synthesizing with Kokoro {voice_id} on {device}")
         chunks = []
         for index, result in enumerate(pipeline(text, voice=voice), start=1):
             if result.audio is not None:
@@ -151,10 +157,15 @@ def load_piper(assets: Path):
     from piper import PiperVoice
 
     emit("status", detail="Loading Piper ONNX voice on CPU")
-    voice = PiperVoice.load(str(assets / "en_US-lessac-medium.onnx"))
+    voices = {"en_US-lessac-medium": PiperVoice.load(str(assets / "en_US-lessac-medium.onnx"))}
 
-    def synthesize(text: str, output: Path, request_id: str | None = None) -> None:
-        emit_request(request_id, "status", detail="Synthesizing with warm Piper")
+    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+        voice_id = voice_id or "en_US-lessac-medium"
+        if voice_id not in voices:
+            model_path = assets / "voices" / voice_id / f"{voice_id}.onnx"
+            voices[voice_id] = PiperVoice.load(str(model_path))
+        voice = voices[voice_id]
+        emit_request(request_id, "status", detail=f"Synthesizing with Piper {voice_id}")
         with wave.open(str(output), "wb") as wav_file:
             voice.synthesize_wav(text, wav_file)
 
@@ -181,7 +192,7 @@ def load_melo(assets: Path):
     bert_device = "mps" if sys.platform == "darwin" and torch.backends.mps.is_available() else "cpu"
     english_bert.model = AutoModelForMaskedLM.from_pretrained("bert-base-uncased").to(bert_device)
 
-    def synthesize(text: str, output: Path, request_id: str | None = None) -> None:
+    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
         class Progress:
             def __call__(self, items):
                 items = list(items)
@@ -190,10 +201,13 @@ def load_melo(assets: Path):
                     yield item
                     emit_request(request_id, "progress", progress=index / total)
 
-        emit_request(request_id, "status", detail="Synthesizing with warm MeloTTS")
+        voice_id = voice_id or "EN-US"
+        if voice_id not in model.hps.data.spk2id:
+            raise ValueError(f"Unknown MeloTTS speaker: {voice_id}")
+        emit_request(request_id, "status", detail=f"Synthesizing with MeloTTS {voice_id}")
         model.tts_to_file(
             text,
-            model.hps.data.spk2id["EN-US"],
+            model.hps.data.spk2id[voice_id],
             str(output),
             pbar=Progress(),
             quiet=True,
@@ -241,18 +255,19 @@ def load_parler(assets: Path):
     description_tokenizer = AutoTokenizer.from_pretrained(
         str(assets / "description-tokenizer"), local_files_only=True
     )
-    description = (
-        "Jon's voice is clear and slightly expressive, with a close, clean recording, "
-        "moderate speed, and almost no background noise."
-    )
-    description_inputs = description_tokenizer(description, return_tensors="pt").to(device)
-
-    def synthesize(text: str, output: Path, request_id: str | None = None) -> None:
+    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+        voice_id = voice_id or "Jon"
+        description = (
+            f"{voice_id}'s voice is clear and slightly expressive, with a moderate speaking rate and natural pitch. "
+            "The recording is of very high quality with very clear audio; the voice sounds close, "
+            "with almost no reverberation or background noise."
+        )
+        description_inputs = description_tokenizer(description, return_tensors="pt").to(device)
         prompt_inputs = prompt_tokenizer(text, return_tensors="pt").to(device)
         emit_request(
             request_id,
             "status",
-            detail=f"Generating with warm Parler-TTS on {device}; DAC decode on {decode_device}",
+            detail=f"Generating Parler-TTS {voice_id} on {device}; DAC decode on {decode_device}",
         )
         with torch.inference_mode():
             audio = model.generate(
@@ -278,7 +293,7 @@ def load_f5(assets: Path):
     )
     reference = files("f5_tts").joinpath("infer/examples/basic/basic_ref_en.wav")
 
-    def synthesize(text: str, output: Path, request_id: str | None = None) -> None:
+    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
         class Progress:
             def tqdm(self, items):
                 items = list(items)
@@ -329,11 +344,12 @@ def serve(model_name: str, assets: Path) -> None:
             request_id = str(request["id"])
             text = str(request["text"]).strip()
             output = Path(request["output"])
+            voice_id = request.get("voice")
             if not text:
                 raise ValueError("No text was provided")
             output.parent.mkdir(parents=True, exist_ok=True)
             started = time.perf_counter()
-            synthesize(text, output, request_id)
+            synthesize(text, output, request_id, voice_id)
             generation_ms = round((time.perf_counter() - started) * 1000, 1)
             emit_request(request_id, "progress", progress=1.0)
             emit_request(request_id, "result", output=str(output), generation_ms=generation_ms)
@@ -347,6 +363,7 @@ def main() -> None:
     parser.add_argument("--model", required=True, choices=["kokoro", "piper", "melo", "parler", "f5"])
     parser.add_argument("--assets", required=True)
     parser.add_argument("--output")
+    parser.add_argument("--voice")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--serve", action="store_true")
     args = parser.parse_args()
@@ -367,7 +384,7 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     emit("progress", progress=0.0)
     synthesize = LOADERS[args.model](assets)
-    synthesize(text, output)
+    synthesize(text, output, voice_id=args.voice)
     emit("progress", progress=1.0)
     emit("status", detail="Audio generated")
 

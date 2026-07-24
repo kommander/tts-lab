@@ -13,6 +13,7 @@ export type ModelPhase =
 
 export interface ModelState {
   id: ModelId
+  voiceId: string
   installed: boolean
   phase: ModelPhase
   detail: string
@@ -34,6 +35,7 @@ export interface DemoController {
   snapshot(): Record<ModelId, ModelState>
   subscribe(listener: (state: ModelState) => void): () => void
   ensure(model: ModelId): Promise<void>
+  setVoice(model: ModelId, voiceId: string): Promise<void>
   speak(model: ModelId, text: string): Promise<void>
   retry(model: ModelId): Promise<void>
   dispose(): void

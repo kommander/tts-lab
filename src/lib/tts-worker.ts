@@ -84,7 +84,7 @@ export class TtsWorker {
     void this.process.exited.then((code) => this.handleExit(code))
   }
 
-  async generate(text: string, output: string): Promise<WorkerResult> {
+  async generate(text: string, output: string, voice?: string): Promise<WorkerResult> {
     await this.ready
     if (this.disposed) throw new Error("TTS worker is not running")
     const id = randomUUID()
@@ -97,7 +97,7 @@ export class TtsWorker {
       this.dispose()
     }, 15 * 60_000)
     this.pending.set(id, { ...deferred, timer })
-    const payload = `${JSON.stringify({ id, text, output })}\n`
+    const payload = `${JSON.stringify({ id, text, output, voice })}\n`
     try {
       await this.process.stdin.write(payload)
       await this.process.stdin.flush()

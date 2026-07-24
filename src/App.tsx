@@ -64,15 +64,23 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const initial = props.controller.snapshot()
   const [states, setStates] = createSignal(initial)
   const [selected, setSelected] = createSignal<ModelId>("kokoro")
-  const [focus, setFocus] = createSignal<"models" | "editor">("models")
+  const [focus, setFocus] = createSignal<"models" | "voices" | "editor">("models")
   const [text, setText] = createSignal("Local speech should be simple, private, and a little bit delightful.")
   const [notice, setNotice] = createSignal("Select a model; setup starts automatically.")
   const [tick, setTick] = createSignal(0)
   let editor: TextareaRenderable | undefined
   let tabs: TabSelectRenderable | undefined
+  let voiceRequest = 0
 
   const state = createMemo(() => states()[selected()])
   const definition = createMemo(() => MODEL_BY_ID[selected()])
+  const selectedVoice = createMemo(
+    () => definition().voices.find((voice) => voice.id === state().voiceId) ?? definition().voices[0]!,
+  )
+  const voiceOptions = createMemo(() =>
+    definition().voices.map((voice) => ({ name: voice.name, description: voice.description, value: voice.id })),
+  )
+  const voiceIndex = createMemo(() => Math.max(0, definition().voices.findIndex((voice) => voice.id === state().voiceId)))
   const latencyItems = createMemo(() => getLatencyItems(state()))
   const busy = createMemo(() => !["idle", "ready", "playing", "error"].includes(state().phase))
   const synthesisActive = createMemo(() =>
@@ -88,9 +96,36 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   )
 
   const choose = (id: ModelId) => {
+    voiceRequest += 1
     setSelected(id)
     setNotice(`${MODEL_BY_ID[id].name} selected`)
     void props.controller.ensure(id).catch((error) => setNotice(error instanceof Error ? error.message : String(error)))
+  }
+
+  const chooseVoice = (voiceId: string) => {
+    const voice = definition().voices.find((candidate) => candidate.id === voiceId)
+    if (!voice) return
+    const request = ++voiceRequest
+    const modelId = selected()
+    const modelName = definition().name
+    setNotice(`${modelName}: preparing ${voice.name}`)
+    void props.controller
+      .setVoice(modelId, voiceId)
+      .then(() => {
+        if (request === voiceRequest && selected() === modelId) setNotice(`${modelName}: ${voice.name} selected`)
+      })
+      .catch((error) => {
+        if (request === voiceRequest && selected() === modelId) {
+          setNotice(error instanceof Error ? error.message : String(error))
+        }
+      })
+  }
+
+  const moveFocus = (direction: 1 | -1) => {
+    const targets: Array<"models" | "voices" | "editor"> =
+      definition().voices.length > 1 ? ["models", "voices", "editor"] : ["models", "editor"]
+    const current = Math.max(0, targets.indexOf(focus()))
+    setFocus(targets[(current + direction + targets.length) % targets.length]!)
   }
 
   const speak = () => {
@@ -123,7 +158,14 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
         name: "app.focus-next",
         desc: "Move focus",
         run() {
-          setFocus((current) => (current === "models" ? "editor" : "models"))
+          moveFocus(1)
+        },
+      },
+      {
+        name: "app.focus-previous",
+        desc: "Move focus backward",
+        run() {
+          moveFocus(-1)
         },
       },
       {
@@ -145,7 +187,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
       { key: "escape", cmd: "app.quit" },
       { key: "ctrl+c", cmd: "app.quit" },
       { key: "tab", cmd: "app.focus-next" },
-      { key: "shift+tab", cmd: "app.focus-next" },
+      { key: "shift+tab", cmd: "app.focus-previous" },
       { key: SPEAK_BINDING, cmd: "tts.speak" },
       { key: "ctrl+r", cmd: "model.retry" },
     ],
@@ -205,6 +247,19 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           padding={1}
           gap={1}
         >
+          <box height={6} flexDirection="column" gap={1}>
+            <text fg={COLORS.muted}>VOICE / {selectedVoice().name}</text>
+            <select
+              focused={focus() === "voices" && definition().voices.length > 1}
+              options={voiceOptions()}
+              selectedIndex={voiceIndex()}
+              height={4}
+              showScrollIndicator
+              selectedBackgroundColor={COLORS.panelRaised}
+              selectedTextColor={COLORS.green}
+              onSelect={(_, option) => option?.value && chooseVoice(option.value as string)}
+            />
+          </box>
           <textarea
             ref={(value) => (editor = value)}
             focused={focus() === "editor"}
@@ -247,7 +302,8 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           <text fg={COLORS.ink}>{definition().tagline}</text>
           <text fg={COLORS.muted}>{definition().footprint}</text>
           <text fg={COLORS.muted}>{definition().license}</text>
-          <text fg={COLORS.cyan}>Voice: {definition().voice}</text>
+          <text fg={COLORS.cyan}>Voice: {selectedVoice().name}</text>
+          <text fg={COLORS.muted} wrapMode="word">{selectedVoice().description}</text>
           <box height={1} />
           <text fg={statusColor(state())}>{state().phase.toUpperCase()} / {state().detail}</text>
           <text fg={state().resident ? COLORS.green : COLORS.muted}>

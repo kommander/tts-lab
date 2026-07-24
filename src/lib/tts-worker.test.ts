@@ -17,7 +17,7 @@ test("keeps one worker alive for multiple generation requests", async () => {
     'print(json.dumps({"type":"ready","load_ms":125.0}), flush=True)',
     "for line in sys.stdin:",
     " request=json.loads(line)",
-    ' print(json.dumps({"type":"status","request_id":request["id"],"detail":"warm"}), flush=True)',
+    ' print(json.dumps({"type":"status","request_id":request["id"],"detail":request.get("voice", "default")}), flush=True)',
     ' print(json.dumps({"type":"result","request_id":request["id"],"output":request["output"],"generation_ms":12.5}), flush=True)',
   ].join("\n")
   const statuses: string[] = []
@@ -29,9 +29,9 @@ test("keeps one worker alive for multiple generation requests", async () => {
   })
 
   expect(loadMs).toBe(125)
-  expect((await worker.generate("one", "one.wav")).generationMs).toBe(12.5)
-  expect((await worker.generate("two", "two.wav")).output).toBe("two.wav")
-  expect(statuses).toEqual(["warm", "warm"])
+  expect((await worker.generate("one", "one.wav", "voice-a")).generationMs).toBe(12.5)
+  expect((await worker.generate("two", "two.wav", "voice-b")).output).toBe("two.wav")
+  expect(statuses).toEqual(["voice-a", "voice-b"])
   worker.dispose()
   await Bun.sleep(10)
   expect(await readFile(join(directory, "worker.log"), "utf8")).toContain('[stdout] {"type": "ready"')

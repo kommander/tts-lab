@@ -3,7 +3,7 @@ import { createTestRenderer } from "@opentui/core/testing"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { render } from "@opentui/solid"
 import { App, getLatencyItems, SPEAK_BINDING } from "./App.js"
-import { MODELS } from "./models.js"
+import { MODEL_BY_ID, MODELS } from "./models.js"
 import type { DemoController, ModelId, ModelState } from "./types.js"
 
 let renderer: Awaited<ReturnType<typeof createTestRenderer>> | undefined
@@ -11,6 +11,7 @@ let renderer: Awaited<ReturnType<typeof createTestRenderer>> | undefined
 function state(id: ModelId): ModelState {
   return {
     id,
+    voiceId: MODEL_BY_ID[id].defaultVoiceId,
     installed: id === "kokoro",
     phase: id === "kokoro" ? "ready" : "idle",
     detail: id === "kokoro" ? "Ready" : "Not installed",
@@ -25,10 +26,14 @@ function state(id: ModelId): ModelState {
 class FakeController implements DemoController {
   constructor(private readonly initial?: Record<ModelId, ModelState>) {}
   speakCount = 0
+  voiceSelections: Array<{ model: ModelId; voiceId: string }> = []
   snapshot = () =>
     this.initial ?? (Object.fromEntries(MODELS.map(({ id }) => [id, state(id)])) as Record<ModelId, ModelState>)
   subscribe = () => () => undefined
   ensure = async () => undefined
+  setVoice = async (model: ModelId, voiceId: string) => {
+    this.voiceSelections.push({ model, voiceId })
+  }
   speak = async () => {
     this.speakCount += 1
   }
@@ -71,4 +76,12 @@ test("renders latency only when the selected state contains it", () => {
   expect(getLatencyItems(ready)).toEqual([])
   ready.lastLatency = { warm: true, loadMs: 0, generationMs: 700, playbackMs: 1 }
   expect(getLatencyItems(ready)).toEqual([ready.lastLatency!])
+})
+
+test("defines model-specific voice catalogs", () => {
+  expect(MODEL_BY_ID.kokoro.voices).toHaveLength(28)
+  expect(MODEL_BY_ID.piper.voices).toHaveLength(3)
+  expect(MODEL_BY_ID.melo.voices).toHaveLength(5)
+  expect(MODEL_BY_ID.parler.voices).toHaveLength(34)
+  expect(MODEL_BY_ID.f5.voices).toHaveLength(1)
 })
