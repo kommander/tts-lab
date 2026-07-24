@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { render } from "@opentui/solid"
-import { App, getLatencyItems, SPEAK_BINDING } from "./App.js"
+import { App, buildSpectrumRows, getLatencyItems, SPEAK_BINDING } from "./App.js"
 import { MODEL_BY_ID, MODELS } from "./models.js"
 import type { DemoController, ModelId, ModelState } from "./types.js"
 
@@ -30,6 +30,11 @@ class FakeController implements DemoController {
   snapshot = () =>
     this.initial ?? (Object.fromEntries(MODELS.map(({ id }) => [id, state(id)])) as Record<ModelId, ModelState>)
   subscribe = () => () => undefined
+  getSpectrum = () => Array(16).fill(0)
+  subscribeSpectrum = (listener: (levels: number[]) => void) => {
+    listener(this.getSpectrum())
+    return () => undefined
+  }
   ensure = async () => undefined
   setVoice = async (model: ModelId, voiceId: string) => {
     this.voiceSelections.push({ model, voiceId })
@@ -56,13 +61,26 @@ test("renders every model and the editor", async () => {
   const frame = renderer.captureCharFrame()
   for (const model of MODELS) expect(frame).toContain(model.name)
   expect(frame).toContain("MODELS")
-  expect(frame).toContain("COMPOSE / KOKORO")
+  expect(frame).not.toContain("COMPOSE / KOKORO")
+  expect(frame).toContain("VOICE BANK / Heart (US)")
+  expect(frame).toContain("SCRIPT")
+  expect(frame).toContain("RUNTIME SIGNAL / COLD")
   expect(frame).toContain("CTRL+G")
+  expect(frame).toContain("SPECTRUM")
+  expect(frame).not.toContain("five engines · private inference · native playback")
+  expect(frame).not.toContain("The published package supports")
   expect(frame.match(/┌/g)?.length).toBeGreaterThanOrEqual(3)
   expect(frame.match(/└/g)?.length).toBeGreaterThanOrEqual(3)
   expect(frame).toContain("││")
   const editorLine = frame.split("\n").find((line) => line.includes("Local speech should be simple"))
   expect(editorLine).toContain("││")
+  const lines = frame.split("\n")
+  expect(lines[0]).toContain("TTS LAB / LOCAL VOICE CONSOLE")
+  expect(lines[1]).toContain("MODELS")
+  const runtimeLine = lines.findIndex((line) => line.includes("RUNTIME SIGNAL"))
+  const spectrumLine = lines.findIndex((line) => line.includes("SPECTRUM"))
+  expect(spectrumLine).toBeGreaterThan(runtimeLine)
+  expect(lines[spectrumLine]!.indexOf("SPECTRUM")).toBeGreaterThan(60)
 })
 
 test("speaks through the Ctrl+G keymap binding", async () => {
@@ -101,9 +119,20 @@ test.each([
   await renderer.renderOnce()
   const frame = renderer.captureCharFrame()
   expect(frame).toContain("TTS LAB")
-  expect(frame).toContain("COMPOSE / KOKORO")
+  expect(frame).toContain("SCRIPT")
   expect(frame).toContain("RUNTIME SIGNAL")
   expect(frame).toContain("CTRL+G")
+  expect(frame).toContain("SPECTRUM")
+  expect(frame).not.toContain("five engines · private inference · native playback")
   expect(frame.match(/┌/g)?.length).toBeGreaterThanOrEqual(3)
   expect(frame.match(/└/g)?.length).toBeGreaterThanOrEqual(3)
+})
+
+test("builds compact spectrum rows from normalized levels", () => {
+  expect(buildSpectrumRows([0, 0.5, 1, 0.25], 4, 4)).toEqual([
+    "· · █ ·",
+    "· · █ ·",
+    "· █ █ ·",
+    "· █ █ █",
+  ])
 })

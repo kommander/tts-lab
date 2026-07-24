@@ -82,6 +82,14 @@ export class ModelManager implements DemoController {
     return () => this.listeners.delete(listener)
   }
 
+  getSpectrum(): number[] {
+    return this.audio.getSpectrum()
+  }
+
+  subscribeSpectrum(listener: (levels: number[]) => void): () => void {
+    return this.audio.subscribeSpectrum(listener)
+  }
+
   async ensure(id: ModelId): Promise<void> {
     if (await this.isInstalled(MODEL_BY_ID[id])) {
       this.markReady(id)

@@ -6,12 +6,8 @@ import { MODEL_BY_ID, MODELS } from "./models.js"
 import type { DemoController, ModelId, ModelState } from "./types.js"
 
 const COLORS = {
-  background: "#0B0D0C",
-  panel: "#121713",
-  panelRaised: "#19211B",
-  panelBright: "#243028",
-  editor: "#151B17",
-  header: "#0E1210",
+  background: "#18201B",
+  header: "#2A3B31",
   ink: "#F3F6E8",
   muted: "#AAB9A8",
   green: "#B8F56A",
@@ -61,6 +57,45 @@ export function getLatencyItems(state: ModelState): NonNullable<ModelState["last
   return state.lastLatency ? [state.lastLatency] : []
 }
 
+export function buildSpectrumRows(levels: readonly number[], barCount: number, rowCount: number): string[] {
+  const sampled = Array.from({ length: barCount }, (_, bar) => {
+    const first = Math.floor((bar * levels.length) / barCount)
+    const last = Math.max(first + 1, Math.floor(((bar + 1) * levels.length) / barCount))
+    let level = 0
+    for (let index = first; index < last; index += 1) level = Math.max(level, levels[index] ?? 0)
+    return level
+  })
+  return Array.from({ length: rowCount }, (_, row) => {
+    const threshold = (rowCount - row) / rowCount
+    return sampled.map((level) => (level >= threshold ? "█" : "·")).join(" ")
+  })
+}
+
+function Spectrum(props: { levels: number[]; compact: boolean }) {
+  const rowCount = () => (props.compact ? 3 : 5)
+  const rows = createMemo(() => buildSpectrumRows(props.levels, 12, rowCount()))
+  const active = createMemo(() => props.levels.some((level) => level > 0.03))
+  const colors = [COLORS.pink, COLORS.amber, COLORS.green, COLORS.cyan, COLORS.cyan]
+  return (
+    <box
+      height={rowCount() + 2}
+      flexShrink={0}
+      flexDirection="column"
+      border
+      borderStyle="single"
+      borderColor={active() ? COLORS.cyan : COLORS.border}
+      title=" SPECTRUM "
+      titleColor={active() ? COLORS.cyan : COLORS.muted}
+      paddingX={1}
+      backgroundColor="transparent"
+    >
+      <For each={rows()}>
+        {(row, index) => <text fg={colors[index()] ?? COLORS.cyan} flexShrink={0}>{row}</text>}
+      </For>
+    </box>
+  )
+}
+
 export const SPEAK_BINDING = "ctrl+g"
 
 export function App(props: { controller: DemoController; keymap: Keymap<Renderable, KeyEvent> }) {
@@ -72,6 +107,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const [selected, setSelected] = createSignal<ModelId>("kokoro")
   const [focus, setFocus] = createSignal<"models" | "voices" | "editor">("models")
   const [text, setText] = createSignal("Local speech should be simple, private, and a little bit delightful.")
+  const [spectrum, setSpectrum] = createSignal(props.controller.getSpectrum())
   const [tick, setTick] = createSignal(0)
   let editor: TextareaRenderable | undefined
   let tabs: TabSelectRenderable | undefined
@@ -194,9 +230,11 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
     const unsubscribe = props.controller.subscribe((next) => {
       setStates((current) => ({ ...current, [next.id]: next }))
     })
+    const unsubscribeSpectrum = props.controller.subscribeSpectrum(setSpectrum)
     const timer = setInterval(() => setTick((value) => value + 1), 120)
     onCleanup(() => {
       unsubscribe()
+      unsubscribeSpectrum()
       clearInterval(timer)
     })
     choose("kokoro")
@@ -205,7 +243,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={COLORS.background}>
       <box
-        height={3}
+        height={1}
         flexShrink={0}
         flexDirection="row"
         columnGap={1}
@@ -214,17 +252,14 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
         paddingX={1}
         backgroundColor={COLORS.header}
       >
-        <box flexDirection="column" flexShrink={0}>
-          <text fg={COLORS.cyan}>TTS LAB / LOCAL VOICE CONSOLE</text>
-          <text fg={COLORS.muted}>five engines · private inference · native playback</text>
-        </box>
+        <text fg={COLORS.cyan} flexShrink={0}>TTS LAB / LOCAL VOICE CONSOLE</text>
         <text fg={COLORS.violet} truncate>{keyHints()}</text>
       </box>
 
       <box
         height={4}
         flexShrink={0}
-        backgroundColor={COLORS.panel}
+        backgroundColor="transparent"
         border
         borderStyle="single"
         borderColor={focus() === "models" ? COLORS.cyan : COLORS.border}
@@ -239,11 +274,11 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           height={2}
           options={options()}
           tabWidth={tabWidth()}
-          backgroundColor={COLORS.panel}
+          backgroundColor="transparent"
           textColor={COLORS.muted}
-          focusedBackgroundColor={COLORS.panel}
+          focusedBackgroundColor="transparent"
           focusedTextColor={COLORS.ink}
-          selectedBackgroundColor={COLORS.panel}
+          selectedBackgroundColor="transparent"
           selectedTextColor={COLORS.cyan}
           selectedDescriptionColor={COLORS.cyan}
           showDescription={false}
@@ -261,45 +296,31 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           height={stacked() ? "56%" : "100%"}
           flexShrink={stacked() ? 1 : 0}
           flexDirection="column"
-          border
-          borderStyle="single"
-          borderColor={COLORS.border}
-          backgroundColor={COLORS.panel}
+          backgroundColor="transparent"
         >
           <box
-            height={2}
-            flexShrink={0}
-            flexDirection="row"
-            alignItems="center"
-            justifyContent="space-between"
-            paddingX={1}
-            backgroundColor={COLORS.panelBright}
-          >
-            <text fg={COLORS.cyan}>COMPOSE / {definition().name.toUpperCase()}</text>
-            <text fg={COLORS.muted} truncate>{selectedVoice().name}</text>
-          </box>
-
-          <box
-            height={compact() ? 6 : 7}
+            height={compact() ? 5 : 6}
             flexShrink={0}
             flexDirection="column"
             paddingX={1}
-            backgroundColor={COLORS.panel}
+            backgroundColor="transparent"
             border
             borderStyle="single"
             borderColor={focus() === "voices" ? COLORS.violet : COLORS.border}
+            title={` VOICE BANK / ${selectedVoice().name} `}
+            titleColor={focus() === "voices" ? COLORS.violet : COLORS.muted}
+            titleAlignment="left"
           >
-            <text fg={focus() === "voices" ? COLORS.violet : COLORS.muted}>VOICE BANK</text>
             <select
               focused={focus() === "voices" && definition().voices.length > 1}
               options={voiceOptions()}
               selectedIndex={voiceIndex()}
               height={compact() ? 3 : 4}
-              backgroundColor={COLORS.panel}
-              focusedBackgroundColor={COLORS.panel}
+              backgroundColor="transparent"
+              focusedBackgroundColor="transparent"
               focusedTextColor={COLORS.ink}
               textColor={COLORS.ink}
-              selectedBackgroundColor={COLORS.panel}
+              selectedBackgroundColor="transparent"
               selectedTextColor={COLORS.violet}
               descriptionColor={COLORS.muted}
               selectedDescriptionColor={COLORS.violet}
@@ -317,8 +338,11 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
             border
             borderStyle="single"
             borderColor={focus() === "editor" ? COLORS.pink : COLORS.border}
-            backgroundColor={COLORS.editor}
+            backgroundColor="transparent"
             overflow="hidden"
+            title=" SCRIPT "
+            titleColor={focus() === "editor" ? COLORS.pink : COLORS.muted}
+            titleAlignment="left"
           >
             <textarea
               ref={(value) => (editor = value)}
@@ -330,31 +354,30 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
               flexGrow={1}
               marginRight={1}
               padding={1}
-              backgroundColor={COLORS.editor}
+              backgroundColor={COLORS.background}
               textColor={COLORS.ink}
-              focusedBackgroundColor={COLORS.editor}
+              focusedBackgroundColor={COLORS.background}
               cursorColor={COLORS.pink}
             />
-          </box>
-
-          <box
-            height={1}
-            flexShrink={0}
-            flexDirection="row"
-            justifyContent="space-between"
-            paddingX={1}
-            backgroundColor={COLORS.panelBright}
-          >
-            <text fg={COLORS.muted}>{text().length} chars</text>
-            <text fg={canSpeak() ? COLORS.green : COLORS.muted} truncate>
-              {canSpeak()
-                ? `${speakKeyLabel}  GENERATE + PLAY`
-                : synthesisActive()
-                  ? "SYNTHESIS IN PROGRESS"
-                  : busy()
-                    ? "SETTING UP MODEL"
-                    : "MODEL NOT READY"}
-            </text>
+            <box
+              height={1}
+              flexShrink={0}
+              flexDirection="row"
+              justifyContent="space-between"
+              paddingX={1}
+              backgroundColor="transparent"
+            >
+              <text fg={COLORS.muted}>{text().length} chars</text>
+              <text fg={canSpeak() ? COLORS.green : COLORS.muted} truncate>
+                {canSpeak()
+                  ? `${speakKeyLabel}  GENERATE + PLAY`
+                  : synthesisActive()
+                    ? "SYNTHESIS IN PROGRESS"
+                    : busy()
+                      ? "SETTING UP MODEL"
+                      : "MODEL NOT READY"}
+              </text>
+            </box>
           </box>
         </box>
 
@@ -362,73 +385,79 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           width={stacked() ? "100%" : undefined}
           flexGrow={1}
           flexDirection="column"
-          border
-          borderStyle="single"
-          borderColor={COLORS.border}
-          backgroundColor={COLORS.panel}
           overflow="hidden"
         >
           <box
-            height={2}
-            flexShrink={0}
-            flexDirection="row"
-            alignItems="center"
-            justifyContent="space-between"
-            paddingX={1}
-            backgroundColor={COLORS.panelBright}
+            flexGrow={1}
+            flexDirection="column"
+            border
+            borderStyle="single"
+            borderColor={COLORS.border}
+            backgroundColor="transparent"
+            overflow="hidden"
+            title={` RUNTIME SIGNAL / ${state().resident ? "HOT" : "COLD"} `}
+            titleColor={state().resident ? COLORS.green : COLORS.amber}
+            titleAlignment="left"
           >
-            <text fg={COLORS.amber}>RUNTIME SIGNAL</text>
-            <text fg={state().resident ? COLORS.green : COLORS.muted}>
-              {state().resident ? "● HOT" : "○ COLD"}
-            </text>
-          </box>
+            <box flexGrow={1} flexDirection="column" paddingX={1} paddingTop={1} overflow="hidden">
+              <text fg={COLORS.ink} flexShrink={0}>{definition().tagline}</text>
+              <text fg={COLORS.muted} flexShrink={0}>{definition().footprint} · {definition().license}</text>
+              <text fg={COLORS.violet} flexShrink={0}>VOICE / {selectedVoice().name}</text>
+              <For each={compact() ? [] : [selectedVoice()]}>
+                {(voice) => <text fg={COLORS.muted} wrapMode="word" flexShrink={0}>{voice.description}</text>}
+              </For>
 
-          <box flexGrow={1} flexDirection="column" paddingX={1} paddingTop={1} overflow="hidden">
-            <text fg={COLORS.ink} flexShrink={0}>{definition().tagline}</text>
-            <text fg={COLORS.muted} flexShrink={0}>{definition().footprint} · {definition().license}</text>
-            <text fg={COLORS.violet} flexShrink={0}>VOICE / {selectedVoice().name}</text>
-            <For each={compact() ? [] : [selectedVoice()]}>
-              {(voice) => <text fg={COLORS.muted} wrapMode="word" flexShrink={0}>{voice.description}</text>}
-            </For>
+              <For each={compact() ? [] : [true]}>{() => <box height={1} flexShrink={0} />}</For>
+              <text fg={statusColor(state())} wrapMode="word" flexShrink={0}>
+                {state().phase.toUpperCase()} / {state().detail}
+              </text>
+              <For each={compact() ? [] : [state()]}>
+                {(current) => (
+                  <text fg={current.resident ? COLORS.green : COLORS.muted} flexShrink={0}>
+                    Worker {current.resident ? "resident · warm requests enabled" : "lazy · starts on first request"}
+                  </text>
+                )}
+              </For>
+              <For each={compact() ? [] : latencyItems()}>
+                {(latency) => (
+                  <text fg={COLORS.cyan} wrapMode="word" flexShrink={0}>
+                    {latency.warm ? "WARM" : "COLD"} · load {latency.warm ? "cached" : shortDuration(latency.loadMs)} · synth {shortDuration(latency.generationMs)} · audio {shortDuration(latency.playbackMs)}
+                  </text>
+                )}
+              </For>
 
-            <For each={compact() ? [] : [true]}>{() => <box height={1} flexShrink={0} />}</For>
-            <text fg={statusColor(state())} bg={COLORS.panelBright} wrapMode="word" flexShrink={0}>
-              {state().phase.toUpperCase()} / {state().detail}
-            </text>
             <For each={compact() ? [] : [state()]}>
               {(current) => (
-                <text fg={current.resident ? COLORS.green : COLORS.muted} flexShrink={0}>
-                  Worker {current.resident ? "resident · warm requests enabled" : "lazy · starts on first request"}
-                </text>
+                <>
+                  <box height={1} flexShrink={0} />
+                  <text fg={COLORS.amber} flexShrink={0}>ENVIRONMENT</text>
+                  <ProgressBar
+                    value={current.setupProgress}
+                    width={progressWidth()}
+                    tick={tick()}
+                    color={COLORS.amber}
+                  />
+                  <text fg={COLORS.muted} truncate flexShrink={0}>
+                    Assets {humanBytes(current.downloadedBytes)} / {humanBytes(current.totalBytes)}
+                  </text>
+                  <ProgressBar
+                    value={current.totalBytes ? current.downloadedBytes / current.totalBytes : 0}
+                    width={progressWidth()}
+                    tick={tick()}
+                    color={COLORS.cyan}
+                  />
+                </>
               )}
             </For>
-            <For each={compact() ? [] : latencyItems()}>
-              {(latency) => (
-                <text fg={COLORS.cyan} wrapMode="word" flexShrink={0}>
-                  {latency.warm ? "WARM" : "COLD"} · load {latency.warm ? "cached" : shortDuration(latency.loadMs)} · synth {shortDuration(latency.generationMs)} · audio {shortDuration(latency.playbackMs)}
+            <For each={compact() ? [state()] : []}>
+              {(current) => (
+                <text fg={COLORS.amber} truncate flexShrink={0}>
+                  ENV {Math.round((current.setupProgress ?? 0) * 100)}% · ASSETS {humanBytes(current.downloadedBytes)}
                 </text>
               )}
             </For>
 
-            <For each={compact() ? [] : [true]}>{() => <box height={1} flexShrink={0} />}</For>
-            <text fg={COLORS.amber} flexShrink={0}>ENVIRONMENT</text>
-            <ProgressBar
-              value={state().setupProgress}
-              width={progressWidth()}
-              tick={tick()}
-              color={COLORS.amber}
-            />
-            <text fg={COLORS.muted} truncate flexShrink={0}>
-              Assets {humanBytes(state().downloadedBytes)} / {humanBytes(state().totalBytes)}
-            </text>
-            <ProgressBar
-              value={state().totalBytes ? state().downloadedBytes / state().totalBytes : 0}
-              width={progressWidth()}
-              tick={tick()}
-              color={COLORS.cyan}
-            />
-
-            <For each={state().phase === "generating" ? [state()] : []}>
+            <For each={!compact() && state().phase === "generating" ? [state()] : []}>
               {() => (
                 <>
                   <text fg={COLORS.pink} flexShrink={0}>SYNTHESIS</text>
@@ -442,15 +471,10 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
               )}
             </For>
 
-            <box flexGrow={1} />
-            <For each={compact() ? [] : [definition()]}>
-              {(model) => (
-                <>
-                  <text fg={COLORS.muted} wrapMode="word" flexShrink={0}>{model.note}</text>
-                </>
-              )}
-            </For>
+              <box flexGrow={1} />
+            </box>
           </box>
+          <Spectrum levels={spectrum()} compact={compact()} />
         </box>
       </box>
 
