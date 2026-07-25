@@ -6,6 +6,7 @@ import {
   copyAudioExport,
   normalizeAudioExportPath,
   resolveResourcePollMs,
+  supportsKokoroAne,
   summarizeGenerationTimes,
 } from "./model-manager.js"
 import { runProcess } from "./process.js"
@@ -40,6 +41,13 @@ test("resolves the resource polling interval", () => {
   expect(resolveResourcePollMs("100")).toBe(250)
   expect(resolveResourcePollMs("0")).toBe(0)
   expect(resolveResourcePollMs("invalid")).toBe(4000)
+})
+
+test("gates the CoreML ANE runtime to supported macOS systems", () => {
+  expect(supportsKokoroAne("darwin", "arm64", "23.0.0")).toBe(true)
+  expect(supportsKokoroAne("darwin", "arm64", "22.6.0")).toBe(false)
+  expect(supportsKokoroAne("darwin", "x64", "25.0.0")).toBe(false)
+  expect(supportsKokoroAne("linux", "arm64", "25.0.0")).toBe(false)
 })
 
 test("copies generated audio without overwriting an existing file", async () => {

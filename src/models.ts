@@ -18,10 +18,13 @@ export interface RuntimeProfile {
   id: string
   name: string
   description: string
-  kind: "python" | "javascript"
+  kind: "python" | "javascript" | "native"
   dtype?: "q8" | "fp32"
+  device?: "cpu" | "webgpu"
+  lowMemory?: boolean
   modelBytes?: number
   modelFile?: string
+  voiceIds?: readonly string[]
 }
 
 export interface ModelDefinition {
@@ -144,10 +147,11 @@ export const MODELS: readonly ModelDefinition[] = [
       pythonRuntime("Current Kokoro 0.9.4 pipeline; best parity with the reference implementation"),
       {
         id: "javascript-onnx-q8",
-        name: "JavaScript / ONNX Q8",
-        description: "92.4 MB quantized ONNX model; no Python runtime",
+        name: "JavaScript / ONNX Q8 Compact",
+        description: "92.4 MB low-download ONNX model; trades speed for a smaller footprint",
         kind: "javascript",
         dtype: "q8",
+        device: "cpu",
         modelBytes: 92361116,
         modelFile: "onnx/model_quantized.onnx",
       },
@@ -157,8 +161,27 @@ export const MODELS: readonly ModelDefinition[] = [
         description: "325.5 MB full-precision ONNX model; no Python runtime",
         kind: "javascript",
         dtype: "fp32",
+        device: "cpu",
+        lowMemory: true,
         modelBytes: 325532232,
         modelFile: "onnx/model.onnx",
+      },
+      {
+        id: "javascript-webgpu-fp32",
+        name: "JavaScript / WebGPU FP32",
+        description: "Experimental native WebGPU execution through Transformers.js 4",
+        kind: "javascript",
+        dtype: "fp32",
+        device: "webgpu",
+        modelBytes: 325532232,
+        modelFile: "onnx/model.onnx",
+      },
+      {
+        id: "native-coreml-ane",
+        name: "Native / CoreML ANE",
+        description: "Experimental Apple Silicon backend; macOS 14+ and Heart voice only",
+        kind: "native",
+        voiceIds: ["af_heart"],
       },
     ],
     defaultRuntimeId: "python-pytorch-fp32",

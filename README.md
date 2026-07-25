@@ -17,6 +17,7 @@ A local workbench for installing, comparing, and actually using open text-to-spe
 
 - Bun 1.3+
 - Python 3.8+ for Python-backed runtimes; Kokoro's JavaScript profiles do not require it
+- Swift 6 and the Xcode command-line tools to build Kokoro's optional native CoreML profile
 - Git for MeloTTS and Parler-TTS packages
 - FFmpeg on `PATH` for F5-TTS
 - Internet access during model setup
@@ -60,7 +61,7 @@ Installing every model can require more than 15 GB because each model has an iso
 
 | Model | Profile | License notes |
 |---|---|---|
-| Kokoro-82M | 28 English voices; CPU, CUDA, or MPS | Apache-2.0 weights |
+| Kokoro-82M | 28 English voices; PyTorch, ONNX CPU/WebGPU, or CoreML ANE | Apache-2.0 weights |
 | Piper | Three US English medium voices; CPU-first | GPL-3.0+ runtime; selected voices have non-commercial or research terms |
 | MeloTTS | Five English accents | MIT model and code |
 | Parler-TTS Mini v1.1 | 34 named, prompt-directed speakers | Apache-2.0 |
@@ -73,12 +74,14 @@ F5-TTS is reference-conditioned rather than speaker-ID based. TTS Lab uses its p
 Kokoro defaults to the reference Python/PyTorch runtime. Press `F3` to switch between:
 
 - Python / PyTorch FP32: 327 MB, closest to the reference implementation.
-- JavaScript / ONNX Q8: 92 MB quantized model, no Python runtime.
-- JavaScript / ONNX FP32: 326 MB full-precision model, no Python runtime.
+- JavaScript / ONNX Q8 Compact: 92 MB low-download model; smaller but slower than FP32 on the tested Apple Silicon system.
+- JavaScript / ONNX FP32: 326 MB full-precision CPU model with lower-memory ONNX session settings.
+- JavaScript / WebGPU FP32: experimental 326 MB profile using ONNX Runtime's native WebGPU provider; no Bun WebGPU flag required.
+- Native / CoreML ANE: experimental FluidAudio 0.15.5 sidecar for macOS 14+ on Apple Silicon; currently limited to `af_heart`.
 
-JavaScript profiles run in-process through `kokoro-js` and Transformers.js. ONNX weights download on first use and remain cached. Runtime choices persist in `.tts-lab/settings.json`.
+JavaScript profiles run in-process through `kokoro-js` 1.2.1 and Transformers.js 4.2.0. ONNX weights download on first use and remain cached. The CoreML profile builds its pinned Swift sidecar on first selection; first synthesis uses about 193 MiB of model/G2P assets and generates about 184 MiB of CoreML cache. Runtime choices persist in `.tts-lab/settings.json`.
 
-Runtime statistics are session-local and kept separate per model profile. Memory values are process-level: JavaScript ONNX memory is included in app RSS, while Python workers report current RSS where supported and peak RSS otherwise. They are not estimates of model tensors alone.
+Runtime statistics are session-local and separate per profile. JavaScript ONNX memory is included in app RSS; Python and CoreML workers report available current and peak RSS. These are process-level values, not model-tensor estimates.
 
 Model, dataset, and voice licenses remain separate from this repository's license. Review them before commercial use or voice replication.
 
@@ -97,6 +100,11 @@ python3 -m py_compile src/python/infer.py
 ```
 
 Tests are headless and do not download model weights. Hardware-specific model setup remains an interactive smoke test.
+
+## Future Models
+
+- Evaluate KittenTTS as a very small CPU-first runtime.
+- Evaluate Pocket TTS for lightweight local voice cloning once its model and redistribution constraints are suitable.
 
 ## License
 

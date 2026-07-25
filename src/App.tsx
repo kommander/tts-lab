@@ -130,6 +130,10 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const selectedRuntime = createMemo(
     () => definition().runtimes.find((runtime) => runtime.id === state().runtimeId) ?? definition().runtimes[0]!,
   )
+  const availableVoices = createMemo(() => {
+    const voiceIds = selectedRuntime().voiceIds
+    return voiceIds ? definition().voices.filter((voice) => voiceIds.includes(voice.id)) : definition().voices
+  })
   const runtimeOptions = createMemo(() =>
     definition().runtimes.map((runtime) => ({
       name: runtime.name,
@@ -141,9 +145,9 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
     Math.max(0, definition().runtimes.findIndex((runtime) => runtime.id === state().runtimeId)),
   )
   const voiceOptions = createMemo(() =>
-    definition().voices.map((voice) => ({ name: voice.name, description: voice.description, value: voice.id })),
+    availableVoices().map((voice) => ({ name: voice.name, description: voice.description, value: voice.id })),
   )
-  const voiceIndex = createMemo(() => Math.max(0, definition().voices.findIndex((voice) => voice.id === state().voiceId)))
+  const voiceIndex = createMemo(() => Math.max(0, availableVoices().findIndex((voice) => voice.id === state().voiceId)))
   const latencyItems = createMemo(() => getLatencyItems(state()))
   const busy = createMemo(() => !["idle", "ready", "playing", "error"].includes(state().phase))
   const synthesisActive = createMemo(() =>
@@ -200,7 +204,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
 
   const moveFocus = (direction: 1 | -1) => {
     const targets: Array<"models" | "voices" | "editor" | "runtime"> =
-      definition().voices.length > 1 ? ["models", "voices", "editor", "runtime"] : ["models", "editor", "runtime"]
+      availableVoices().length > 1 ? ["models", "voices", "editor", "runtime"] : ["models", "editor", "runtime"]
     const current = Math.max(0, targets.indexOf(focus()))
     setFocus(targets[(current + direction + targets.length) % targets.length]!)
   }
@@ -473,7 +477,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
             titleAlignment="left"
           >
             <select
-              focused={focus() === "voices" && definition().voices.length > 1}
+              focused={focus() === "voices" && availableVoices().length > 1}
               options={voiceOptions()}
               selectedIndex={voiceIndex()}
               height={compact() ? 3 : 4}
@@ -644,15 +648,21 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
                 tick={tick()}
                 color={COLORS.amber}
               />
-              <text fg={COLORS.muted} truncate flexShrink={0}>
-                Assets {humanBytes(state().downloadedBytes)} / {humanBytes(state().totalBytes)}
-              </text>
-              <ProgressBar
-                value={state().totalBytes ? state().downloadedBytes / state().totalBytes : 0}
-                width={progressWidth()}
-                tick={tick()}
-                color={COLORS.cyan}
-              />
+              <For each={state().totalBytes ? [state()] : []}>
+                {() => (
+                  <>
+                    <text fg={COLORS.muted} truncate flexShrink={0}>
+                      Assets {humanBytes(state().downloadedBytes)} / {humanBytes(state().totalBytes)}
+                    </text>
+                    <ProgressBar
+                      value={state().downloadedBytes / state().totalBytes}
+                      width={progressWidth()}
+                      tick={tick()}
+                      color={COLORS.cyan}
+                    />
+                  </>
+                )}
+              </For>
 
               <For each={state().phase === "generating" ? [state()] : []}>
                 {() => (

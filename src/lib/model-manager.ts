@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { constants, readFileSync } from "node:fs"
 import { appendFile, copyFile, mkdir, readFile, rm, stat } from "node:fs/promises"
+import { release } from "node:os"
 import { dirname, extname, join, resolve } from "node:path"
 import { AudioPlayer } from "./audio-player.js"
 import { downloadAssets } from "./download.js"
@@ -14,6 +15,8 @@ const PROJECT_ROOT = resolve(import.meta.dir, "../..")
 const APP_HOME = resolve(Bun.env.TTS_LAB_HOME ?? join(PROJECT_ROOT, ".tts-lab"))
 const UV_VERSION = "0.11.32"
 const DEFAULT_RESOURCE_POLL_MS = 4000
+const KOKORO_ANE_BUILD_VERSION = "fluidaudio-0.15.5-v1"
+const KOKORO_ANE_PACKAGE = join(PROJECT_ROOT, "native", "kokoro-ane")
 
 function formatDuration(milliseconds: number): string {
   return milliseconds < 1000 ? `${Math.round(milliseconds)}ms` : `${(milliseconds / 1000).toFixed(2)}s`
@@ -41,6 +44,11 @@ export function resolveResourcePollMs(value: string | undefined): number {
   }
   if (milliseconds === 0) return 0
   return Math.max(250, milliseconds)
+}
+
+export function supportsKokoroAne(platform: NodeJS.Platform, arch: string, kernelRelease: string): boolean {
+  const darwinMajor = Number.parseInt(kernelRelease.split(".")[0] ?? "", 10)
+  return platform === "darwin" && arch === "arm64" && Number.isFinite(darwinMajor) && darwinMajor >= 23
 }
 
 export function normalizeAudioExportPath(path: string, format: "wav"): string {
@@ -106,12 +114,14 @@ export class ModelManager implements DemoController {
   private readonly audio = new AudioPlayer()
   private controller = new AbortController()
   private uvInstall?: Promise<string>
+  private nativeBuild?: { promise: Promise<string>; controller: AbortController }
   private synthesis?: Promise<void>
   private activeAudioModel?: ModelId
   private activeWorker?: { id: ModelId; runtimeId: string; worker: RuntimeWorker; loadMs: number }
   private startingWorker?: RuntimeWorker
   private latestAudio?: LatestAudio & { path: string }
   private readonly generationHistory = new Map<string, number[]>()
+  private readonly runtimeChangeVersions = new Map<ModelId, number>()
   private readonly resourceTimer?: ReturnType<typeof setInterval>
 
   constructor() {
@@ -122,7 +132,7 @@ export class ModelManager implements DemoController {
       }
     })
     this.loadRuntimeSettings()
-    void this.refresh()
+    void this.refresh().catch(() => undefined)
     const resourcePollMs = resolveResourcePollMs(Bun.env.TTS_LAB_RESOURCE_POLL_MS)
     if (resourcePollMs > 0) {
       this.resourceTimer = setInterval(() => this.refreshResourceUsage(), resourcePollMs)
@@ -164,6 +174,10 @@ export class ModelManager implements DemoController {
       await this.ensureJavascriptRuntime(id, runtime)
       return
     }
+    if (runtime.kind === "native") {
+      await this.ensureNativeRuntime(id, runtime)
+      return
+    }
     if (await this.isPythonInstalled(MODEL_BY_ID[id])) {
       this.markReady(id)
       return
@@ -191,6 +205,10 @@ export class ModelManager implements DemoController {
     const model = MODEL_BY_ID[id]
     const voice = model.voices.find((candidate) => candidate.id === voiceId)
     if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
+    const runtime = this.runtime(id)
+    if (runtime.voiceIds && !runtime.voiceIds.includes(voiceId)) {
+      throw new Error(`${runtime.name} does not support ${voice.name}`)
+    }
     if (["generating", "playing"].includes(this.states[id].phase)) {
       throw new Error(`Wait for the current ${model.name} synthesis to finish before changing voices`)
     }
@@ -214,7 +232,17 @@ export class ModelManager implements DemoController {
     const model = MODEL_BY_ID[id]
     const runtime = model.runtimes.find((candidate) => candidate.id === runtimeId)
     if (!runtime) throw new Error(`Unknown ${model.name} runtime: ${runtimeId}`)
-    if (this.states[id].runtimeId === runtimeId) return
+    const changeVersion = (this.runtimeChangeVersions.get(id) ?? 0) + 1
+    this.runtimeChangeVersions.set(id, changeVersion)
+    const isCurrentChange = () => this.runtimeChangeVersions.get(id) === changeVersion
+    if (this.states[id].runtimeId === runtimeId) {
+      const interruptedBuild = runtime.kind === "native" && this.nativeBuild?.controller.signal.aborted
+      if (interruptedBuild) {
+        await this.nativeBuild!.promise.catch(() => undefined)
+        if (isCurrentChange()) await this.ensure(id)
+      }
+      return
+    }
     if (["generating", "playing"].includes(this.states[id].phase)) {
       throw new Error(`Wait for the current ${model.name} synthesis to finish before changing runtime`)
     }
@@ -222,17 +250,30 @@ export class ModelManager implements DemoController {
     if (activeInstall) {
       activeInstall.controller.abort()
       await activeInstall.promise.catch(() => undefined)
+      if (!isCurrentChange()) return
+    }
+    const activeNativeBuild = this.nativeBuild
+    if (activeNativeBuild && runtime.kind !== "native") {
+      activeNativeBuild.controller.abort()
+      await activeNativeBuild.promise.catch(() => undefined)
+      if (!isCurrentChange()) return
     }
     const activeVoiceDownloads = [...this.voiceDownloads.entries()].filter(([key]) => key.startsWith(`${id}:`))
     for (const [, download] of activeVoiceDownloads) download.controller.abort()
     await Promise.allSettled(activeVoiceDownloads.map(([, download]) => download.promise))
+    if (!isCurrentChange()) return
     if (this.activeWorker?.id === id) {
       const active = this.activeWorker
       this.activeWorker = undefined
       await active.worker.stop()
+      if (!isCurrentChange()) return
     }
+    const voiceId = runtime.voiceIds?.includes(this.states[id].voiceId)
+      ? this.states[id].voiceId
+      : runtime.voiceIds?.[0] ?? this.states[id].voiceId
     this.patch(id, {
       runtimeId,
+      voiceId,
       installed: false,
       resident: false,
       phase: "idle",
@@ -242,8 +283,9 @@ export class ModelManager implements DemoController {
       error: undefined,
     })
     await this.saveRuntimeSettings()
+    if (!isCurrentChange()) return
     await this.ensure(id)
-    this.restoreRuntimeStats(id, runtimeId)
+    if (isCurrentChange() && this.states[id].runtimeId === runtimeId) this.restoreRuntimeStats(id, runtimeId)
   }
 
   async speak(id: ModelId, text: string): Promise<void> {
@@ -309,6 +351,7 @@ export class ModelManager implements DemoController {
     this.controller.abort()
     if (this.resourceTimer) clearInterval(this.resourceTimer)
     for (const install of this.installs.values()) install.controller.abort()
+    this.nativeBuild?.controller.abort()
     for (const download of this.voiceDownloads.values()) download.controller.abort()
     this.startingWorker?.dispose()
     this.startingWorker = undefined
@@ -325,6 +368,8 @@ export class ModelManager implements DemoController {
       const runtime = this.runtime(model.id)
       if (runtime.kind === "javascript") {
         await this.ensureJavascriptRuntime(model.id, runtime)
+      } else if (runtime.kind === "native") {
+        await this.ensureNativeRuntime(model.id, runtime)
       } else if (await this.isPythonInstalled(model)) {
         this.markReady(model.id)
       }
@@ -370,6 +415,106 @@ export class ModelManager implements DemoController {
       totalBytes: runtime.modelBytes,
       error: undefined,
     })
+  }
+
+  private async ensureNativeRuntime(id: ModelId, runtime: RuntimeProfile): Promise<void> {
+    if (id !== "kokoro" || runtime.id !== "native-coreml-ane") {
+      throw new Error(`Native runtime is not configured for ${MODEL_BY_ID[id].name}`)
+    }
+    if (!supportsKokoroAne(process.platform, process.arch, release())) {
+      const message = "Kokoro CoreML ANE requires macOS 14 or newer on Apple Silicon"
+      if (this.states[id].runtimeId === runtime.id) {
+        this.patch(id, { installed: false, phase: "error", detail: message, error: message })
+      }
+      throw new Error(message)
+    }
+    if (await exists(this.nativeBinaryPath())) {
+      if (this.states[id].runtimeId === runtime.id) {
+        this.patch(id, {
+          installed: true,
+          phase: "ready",
+          detail: "Ready; CoreML models download on first use",
+          setupProgress: 1,
+          downloadedBytes: 0,
+          totalBytes: 0,
+          error: undefined,
+        })
+      }
+      return
+    }
+
+    this.patch(id, {
+      installed: false,
+      phase: "setup",
+      detail: "Building pinned FluidAudio CoreML sidecar",
+      setupProgress: null,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      error: undefined,
+    })
+    let build = this.nativeBuild
+    if (!build) {
+      const controller = new AbortController()
+      const abort = () => controller.abort()
+      this.controller.signal.addEventListener("abort", abort, { once: true })
+      const promise = this.buildNativeRuntime(id, controller.signal).finally(() => {
+        this.controller.signal.removeEventListener("abort", abort)
+        if (this.nativeBuild?.promise === promise) this.nativeBuild = undefined
+      })
+      build = { promise, controller }
+      this.nativeBuild = build
+    }
+    try {
+      await build.promise
+      if (this.states[id].runtimeId === runtime.id) {
+        this.patch(id, {
+          installed: true,
+          phase: "ready",
+          detail: "Ready; CoreML models download on first use",
+          setupProgress: 1,
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (this.states[id].runtimeId === runtime.id) {
+        this.patch(id, { phase: "error", detail: message, error: message })
+      }
+      throw error
+    }
+  }
+
+  private async buildNativeRuntime(id: ModelId, signal: AbortSignal): Promise<string> {
+    if (!(await commandExists("swift", ["--version"]))) {
+      throw new Error("The CoreML ANE runtime requires Swift 6 and the Xcode command-line tools")
+    }
+    const scratch = this.nativeBuildDir()
+    await mkdir(scratch, { recursive: true })
+    await runProcess(
+      [
+        "swift",
+        "build",
+        "--package-path",
+        KOKORO_ANE_PACKAGE,
+        "--scratch-path",
+        scratch,
+        "-c",
+        "release",
+        "--product",
+        "tts-lab-kokoro-ane",
+      ],
+      {
+        signal,
+        logPath: this.logPath(id),
+        onLine: (line) => {
+          if (this.states[id].runtimeId === "native-coreml-ane") {
+            this.patch(id, { detail: line.slice(0, 120) })
+          }
+        },
+      },
+    )
+    const binary = this.nativeBinaryPath()
+    if (!(await exists(binary))) throw new Error("Swift completed without producing the CoreML sidecar")
+    return binary
   }
 
   private async install(model: ModelDefinition, runtimeId: string, signal: AbortSignal): Promise<void> {
@@ -566,11 +711,13 @@ export class ModelManager implements DemoController {
     }
 
     if (runtime.kind === "javascript") {
-      if (id !== "kokoro" || !runtime.dtype || !runtime.modelBytes) {
+      if (id !== "kokoro" || !runtime.dtype || !runtime.device || !runtime.modelBytes) {
         throw new Error(`JavaScript runtime is not configured for ${MODEL_BY_ID[id].name}`)
       }
       const started = await KokoroJsWorker.start({
         dtype: runtime.dtype,
+        device: runtime.device,
+        lowMemory: runtime.lowMemory,
         cacheDir: this.javascriptCacheDir(id),
         modelBytes: runtime.modelBytes,
         signal: this.controller.signal,
@@ -586,9 +733,18 @@ export class ModelManager implements DemoController {
       return this.activeWorker
     }
 
-    let instance: TtsWorker | undefined
-    const worker = await TtsWorker.spawn({
-      command: [
+    let command: string[]
+    let env: Record<string, string | undefined>
+    if (runtime.kind === "native") {
+      const nativeHome = join(APP_HOME, "native-home")
+      await mkdir(nativeHome, { recursive: true })
+      command = [this.nativeBinaryPath()]
+      env = {
+        CFFIXED_USER_HOME: nativeHome,
+        HOME: nativeHome,
+      }
+    } else {
+      command = [
         envPython(this.envDir(id)),
         "-u",
         join(PROJECT_ROOT, "src", "python", "infer.py"),
@@ -597,13 +753,19 @@ export class ModelManager implements DemoController {
         "--assets",
         this.assetDir(id),
         "--serve",
-      ],
-      env: {
+      ]
+      env = {
         HF_HOME: join(APP_HOME, "hf-cache", id),
         NLTK_DATA: join(this.assetDir(id), "nltk"),
         PYTORCH_ENABLE_MPS_FALLBACK: "1",
         TOKENIZERS_PARALLELISM: "false",
-      },
+      }
+    }
+
+    let instance: TtsWorker | undefined
+    const worker = await TtsWorker.spawn({
+      command,
+      env,
       logPath: this.logPath(id),
       onStatus: (event) => this.handleWorkerEvent(id, event),
       onExit: () => {
@@ -630,7 +792,7 @@ export class ModelManager implements DemoController {
       throw new DOMException("The operation was aborted", "AbortError")
     }
     this.activeWorker = { id, runtimeId: runtime.id, worker, loadMs }
-    this.patch(id, { resident: true })
+      this.patch(id, { resident: true })
     this.refreshResourceUsage()
     return this.activeWorker
   }
@@ -727,7 +889,7 @@ export class ModelManager implements DemoController {
     const model = MODEL_BY_ID[id]
     const voice = model.voices.find((candidate) => candidate.id === voiceId)
     if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
-    if (this.runtime(id).kind === "javascript") return
+    if (this.runtime(id).kind !== "python") return
     if (!voice.assets?.length || (await this.assetsExist(id, voice.assets))) return
 
     const key = `${id}:${voiceId}`
@@ -802,6 +964,14 @@ export class ModelManager implements DemoController {
 
   private javascriptCacheDir(id: ModelId): string {
     return join(this.modelDir(id), "javascript-cache")
+  }
+
+  private nativeBuildDir(): string {
+    return join(APP_HOME, "tools", `kokoro-ane-${KOKORO_ANE_BUILD_VERSION}`)
+  }
+
+  private nativeBinaryPath(): string {
+    return join(this.nativeBuildDir(), "release", "tts-lab-kokoro-ane")
   }
 
   private settingsPath(): string {

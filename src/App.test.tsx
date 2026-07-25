@@ -132,7 +132,12 @@ test("defines verified Kokoro runtime profiles with Python as default", () => {
     "python-pytorch-fp32",
     "javascript-onnx-q8",
     "javascript-onnx-fp32",
+    "javascript-webgpu-fp32",
+    "native-coreml-ane",
   ])
+  expect(MODEL_BY_ID.kokoro.runtimes.find((runtime) => runtime.id === "javascript-onnx-fp32")?.lowMemory).toBe(true)
+  expect(MODEL_BY_ID.kokoro.runtimes.find((runtime) => runtime.id === "javascript-webgpu-fp32")?.device).toBe("webgpu")
+  expect(MODEL_BY_ID.kokoro.runtimes.find((runtime) => runtime.id === "native-coreml-ane")?.voiceIds).toEqual(["af_heart"])
   for (const model of MODELS.slice(1)) expect(model.runtimes).toHaveLength(1)
 })
 
