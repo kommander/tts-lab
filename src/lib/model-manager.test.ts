@@ -6,7 +6,8 @@ import {
   copyAudioExport,
   normalizeAudioExportPath,
   resolveResourcePollMs,
-  supportsKokoroAne,
+  supportsNativeCoreMl,
+  supportsRuntimePlatform,
   summarizeGenerationTimes,
 } from "./model-manager.js"
 import { runProcess } from "./process.js"
@@ -44,10 +45,18 @@ test("resolves the resource polling interval", () => {
 })
 
 test("gates the CoreML ANE runtime to supported macOS systems", () => {
-  expect(supportsKokoroAne("darwin", "arm64", "23.0.0")).toBe(true)
-  expect(supportsKokoroAne("darwin", "arm64", "22.6.0")).toBe(false)
-  expect(supportsKokoroAne("darwin", "x64", "25.0.0")).toBe(false)
-  expect(supportsKokoroAne("linux", "arm64", "25.0.0")).toBe(false)
+  expect(supportsNativeCoreMl("darwin", "arm64", "23.0.0")).toBe(true)
+  expect(supportsNativeCoreMl("darwin", "arm64", "22.6.0")).toBe(false)
+  expect(supportsNativeCoreMl("darwin", "x64", "25.0.0")).toBe(false)
+  expect(supportsNativeCoreMl("linux", "arm64", "25.0.0")).toBe(false)
+})
+
+test("applies runtime-specific macOS requirements without blocking other platforms", () => {
+  const runtime = { id: "test", name: "Test", description: "Test", kind: "python" as const, darwinArch: "arm64" as const, minimumDarwinMajor: 23 }
+  expect(supportsRuntimePlatform(runtime, "darwin", "arm64", "23.0.0")).toBe(true)
+  expect(supportsRuntimePlatform(runtime, "darwin", "x64", "25.0.0")).toBe(false)
+  expect(supportsRuntimePlatform(runtime, "darwin", "arm64", "22.0.0")).toBe(false)
+  expect(supportsRuntimePlatform(runtime, "linux", "x64", "6.0.0")).toBe(true)
 })
 
 test("copies generated audio without overwriting an existing file", async () => {

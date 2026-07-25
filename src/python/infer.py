@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
+import subprocess
+import shutil
 import sys
 import time
 import traceback
+import tempfile
 import wave
 from pathlib import Path
 from types import ModuleType
@@ -44,6 +48,17 @@ def resource_snapshot() -> dict[str, int]:
                 resident_pages = int(statm.read().split()[1])
             snapshot["rssBytes"] = resident_pages * int(os.sysconf("SC_PAGE_SIZE"))
         except (OSError, ValueError, IndexError):
+            pass
+    elif sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(os.getpid())],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            snapshot["rssBytes"] = int(result.stdout.strip()) * 1024
+        except (OSError, subprocess.SubprocessError, ValueError):
             pass
     return snapshot
 
@@ -117,6 +132,9 @@ def check(model: str, assets: Path) -> None:
     emit("status", detail="Importing runtime")
     if model == "kokoro":
         import kokoro  # noqa: F401
+    elif model == "kitten":
+        emit("status", detail="Checking KittenTTS Nano INT8 model")
+        create_kitten_model(assets)
     elif model == "piper":
         import piper  # noqa: F401
     elif model == "melo":
@@ -168,6 +186,48 @@ def load_kokoro(assets: Path):
         if not chunks:
             raise RuntimeError("Kokoro produced no audio")
         sf.write(output, np.concatenate(chunks), 24000)
+
+    return synthesize
+
+
+def create_kitten_model(assets: Path):
+    import espeakng_loader
+    from kittentts.onnx_model import KittenTTS_1_Onnx
+
+    if os.name != "nt":
+        # eSpeak's compiled data-path buffer can reject long virtualenv paths.
+        # Point it at the same bundled data through a short process-local link.
+        espeak_root = Path(tempfile.mkdtemp(prefix="tts-lab-espeak-"))
+        espeak_link = espeak_root / "data"
+        espeak_link.symlink_to(espeakng_loader.get_data_path(), target_is_directory=True)
+        os.environ["ESPEAK_DATA_PATH"] = str(espeak_link)
+        atexit.register(shutil.rmtree, espeak_root, ignore_errors=True)
+
+    with open(assets / "config.json", "r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    return KittenTTS_1_Onnx(
+        model_path=str(assets / config["model_file"]),
+        voices_path=str(assets / config["voices"]),
+        speed_priors=config.get("speed_priors", {}),
+        voice_aliases=config.get("voice_aliases", {}),
+        backend="cpu",
+    )
+
+
+def load_kitten(assets: Path):
+    import numpy as np
+    import soundfile as sf
+
+    emit("status", detail="Loading KittenTTS Nano INT8 on CPU")
+    model = create_kitten_model(assets)
+
+    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+        voice_id = voice_id or "Jasper"
+        emit_request(request_id, "status", detail=f"Synthesizing with KittenTTS {voice_id} on CPU")
+        audio = np.asarray(model.generate(text, voice=voice_id, speed=1.0, clean_text=True), dtype=np.float32).squeeze()
+        if audio.ndim != 1 or audio.size == 0 or not np.isfinite(audio).all():
+            raise RuntimeError("KittenTTS produced invalid audio")
+        sf.write(output, audio, 24000, subtype="PCM_16")
 
     return synthesize
 
@@ -337,6 +397,7 @@ def load_f5(assets: Path):
 
 LOADERS = {
     "kokoro": load_kokoro,
+    "kitten": load_kitten,
     "piper": load_piper,
     "melo": load_melo,
     "parler": load_parler,
@@ -385,7 +446,7 @@ def serve(model_name: str, assets: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, choices=["kokoro", "piper", "melo", "parler", "f5"])
+    parser.add_argument("--model", required=True, choices=["kokoro", "kitten", "piper", "melo", "parler", "f5"])
     parser.add_argument("--assets", required=True)
     parser.add_argument("--output")
     parser.add_argument("--voice")

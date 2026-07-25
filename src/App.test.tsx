@@ -120,6 +120,8 @@ test("renders latency only when the selected state contains it", () => {
 
 test("defines model-specific voice catalogs", () => {
   expect(MODEL_BY_ID.kokoro.voices).toHaveLength(28)
+  expect(MODEL_BY_ID.kitten.voices).toHaveLength(8)
+  expect(MODEL_BY_ID.pocket.voices).toHaveLength(8)
   expect(MODEL_BY_ID.piper.voices).toHaveLength(3)
   expect(MODEL_BY_ID.melo.voices).toHaveLength(5)
   expect(MODEL_BY_ID.parler.voices).toHaveLength(34)
@@ -138,6 +140,15 @@ test("defines verified Kokoro runtime profiles with Python as default", () => {
   expect(MODEL_BY_ID.kokoro.runtimes.find((runtime) => runtime.id === "javascript-onnx-fp32")?.lowMemory).toBe(true)
   expect(MODEL_BY_ID.kokoro.runtimes.find((runtime) => runtime.id === "javascript-webgpu-fp32")?.device).toBe("webgpu")
   expect(MODEL_BY_ID.kokoro.runtimes.find((runtime) => runtime.id === "native-coreml-ane")?.voiceIds).toEqual(["af_heart"])
+  expect(MODEL_BY_ID.kitten.defaultRuntimeId).toBe("python-onnx-int8")
+  expect(MODEL_BY_ID.kitten.packages?.every((dependency) => dependency.includes("=="))).toBe(true)
+  expect(MODEL_BY_ID.kitten.noBuildIsolation).toBe(true)
+  const pocketRuntime = MODEL_BY_ID.pocket.runtimes[0]!
+  expect(pocketRuntime.id).toBe("native-coreml-ane-fp16")
+  expect(pocketRuntime.nativeBackend).toBe("pocket")
+  expect(pocketRuntime.assets?.reduce((sum, asset) => sum + asset.size, 0)).toBe(367490063)
+  expect(pocketRuntime.assets?.every((asset) => asset.sha256 && asset.url.includes("1bd207828251accf30f09a965c84856cd874e9f4"))).toBe(true)
+  expect(MODEL_BY_ID.pocket.voices.slice(1).every((voice) => voice.assets?.every((asset) => asset.sha256))).toBe(true)
   for (const model of MODELS.slice(1)) expect(model.runtimes).toHaveLength(1)
 })
 

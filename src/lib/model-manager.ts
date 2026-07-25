@@ -15,8 +15,8 @@ const PROJECT_ROOT = resolve(import.meta.dir, "../..")
 const APP_HOME = resolve(Bun.env.TTS_LAB_HOME ?? join(PROJECT_ROOT, ".tts-lab"))
 const UV_VERSION = "0.11.32"
 const DEFAULT_RESOURCE_POLL_MS = 4000
-const KOKORO_ANE_BUILD_VERSION = "fluidaudio-0.15.5-v1"
-const KOKORO_ANE_PACKAGE = join(PROJECT_ROOT, "native", "kokoro-ane")
+const FLUIDAUDIO_BUILD_VERSION = "0.15.5-v2"
+const FLUIDAUDIO_PACKAGE = join(PROJECT_ROOT, "native", "fluidaudio-sidecar")
 
 function formatDuration(milliseconds: number): string {
   return milliseconds < 1000 ? `${Math.round(milliseconds)}ms` : `${(milliseconds / 1000).toFixed(2)}s`
@@ -46,9 +46,21 @@ export function resolveResourcePollMs(value: string | undefined): number {
   return Math.max(250, milliseconds)
 }
 
-export function supportsKokoroAne(platform: NodeJS.Platform, arch: string, kernelRelease: string): boolean {
+export function supportsNativeCoreMl(platform: NodeJS.Platform, arch: string, kernelRelease: string): boolean {
   const darwinMajor = Number.parseInt(kernelRelease.split(".")[0] ?? "", 10)
   return platform === "darwin" && arch === "arm64" && Number.isFinite(darwinMajor) && darwinMajor >= 23
+}
+
+export function supportsRuntimePlatform(
+  runtime: RuntimeProfile,
+  platform: NodeJS.Platform,
+  arch: string,
+  kernelRelease: string,
+): boolean {
+  if (platform !== "darwin") return true
+  const darwinMajor = Number.parseInt(kernelRelease.split(".")[0] ?? "", 10)
+  return (!runtime.darwinArch || runtime.darwinArch === arch)
+    && (!runtime.minimumDarwinMajor || darwinMajor >= runtime.minimumDarwinMajor)
 }
 
 export function normalizeAudioExportPath(path: string, format: "wav"): string {
@@ -71,19 +83,24 @@ export async function copyAudioExport(source: string, path: string, format: "wav
   return destination
 }
 
-const freshState = (id: ModelId): ModelState => ({
-  id,
-  voiceId: MODEL_BY_ID[id].defaultVoiceId,
-  runtimeId: MODEL_BY_ID[id].defaultRuntimeId,
-  installed: false,
-  phase: "idle",
-  detail: "Not installed",
-  setupProgress: 0,
-  downloadedBytes: 0,
-  totalBytes: MODEL_BY_ID[id].assets.reduce((sum, asset) => sum + asset.size, 0),
-  generationProgress: 0,
-  resident: false,
-})
+const freshState = (id: ModelId): ModelState => {
+  const model = MODEL_BY_ID[id]
+  const runtime = model.runtimes.find((candidate) => candidate.id === model.defaultRuntimeId) ?? model.runtimes[0]!
+  const assets = runtime.assets ?? model.assets
+  return {
+    id,
+    voiceId: model.defaultVoiceId,
+    runtimeId: model.defaultRuntimeId,
+    installed: false,
+    phase: "idle",
+    detail: "Not installed",
+    setupProgress: 0,
+    downloadedBytes: 0,
+    totalBytes: assets.reduce((sum, asset) => sum + asset.size, 0),
+    generationProgress: 0,
+    resident: false,
+  }
+}
 
 function envPython(envDir: string): string {
   return process.platform === "win32" ? join(envDir, "Scripts", "python.exe") : join(envDir, "bin", "python")
@@ -109,12 +126,15 @@ export class ModelManager implements DemoController {
     ModelState
   >
   private readonly listeners = new Set<(state: ModelState) => void>()
-  private readonly installs = new Map<ModelId, { promise: Promise<void>; controller: AbortController }>()
+  private readonly installs = new Map<
+    ModelId,
+    { runtimeId: string; promise: Promise<void>; controller: AbortController }
+  >()
   private readonly voiceDownloads = new Map<string, { promise: Promise<void>; controller: AbortController }>()
   private readonly audio = new AudioPlayer()
   private controller = new AbortController()
   private uvInstall?: Promise<string>
-  private nativeBuild?: { promise: Promise<string>; controller: AbortController }
+  private nativeBuild?: { promise: Promise<string>; controller: AbortController; users: Set<ModelId> }
   private synthesis?: Promise<void>
   private activeAudioModel?: ModelId
   private activeWorker?: { id: ModelId; runtimeId: string; worker: RuntimeWorker; loadMs: number }
@@ -122,6 +142,7 @@ export class ModelManager implements DemoController {
   private latestAudio?: LatestAudio & { path: string }
   private readonly generationHistory = new Map<string, number[]>()
   private readonly runtimeChangeVersions = new Map<ModelId, number>()
+  private readonly voiceChangeVersions = new Map<ModelId, number>()
   private readonly resourceTimer?: ReturnType<typeof setInterval>
 
   constructor() {
@@ -170,29 +191,45 @@ export class ModelManager implements DemoController {
 
   async ensure(id: ModelId): Promise<void> {
     const runtime = this.runtime(id)
+    if (!supportsRuntimePlatform(runtime, process.platform, process.arch, release())) {
+      const message = `${MODEL_BY_ID[id].name} requires macOS 14 or newer on Apple Silicon`
+      this.patch(id, { installed: false, phase: "error", detail: message, error: message })
+      throw new Error(message)
+    }
     if (runtime.kind === "javascript") {
       await this.ensureJavascriptRuntime(id, runtime)
       return
     }
-    if (runtime.kind === "native") {
-      await this.ensureNativeRuntime(id, runtime)
-      return
-    }
-    if (await this.isPythonInstalled(MODEL_BY_ID[id])) {
-      this.markReady(id)
-      return
-    }
     const active = this.installs.get(id)
-    if (active) return active.promise
+    if (active?.runtimeId === runtime.id) return active.promise
+    if (active) {
+      active.controller.abort()
+      await active.promise.catch(() => undefined)
+    }
     const controller = new AbortController()
     const abort = () => controller.abort()
     this.controller.signal.addEventListener("abort", abort, { once: true })
-    const promise = this.install(MODEL_BY_ID[id], runtime.id, controller.signal).finally(() => {
+    const promise = this.prepareRuntime(id, runtime, controller.signal).finally(() => {
       this.controller.signal.removeEventListener("abort", abort)
-      this.installs.delete(id)
+      if (this.installs.get(id)?.promise === promise) this.installs.delete(id)
     })
-    this.installs.set(id, { promise, controller })
+    this.installs.set(id, { runtimeId: runtime.id, promise, controller })
     return promise
+  }
+
+  private async prepareRuntime(id: ModelId, runtime: RuntimeProfile, signal: AbortSignal): Promise<void> {
+    if (runtime.kind === "native") {
+      await this.ensureNativeRuntime(id, runtime, signal)
+      return
+    }
+    const model = MODEL_BY_ID[id]
+    const installed = await this.isPythonInstalled(model)
+    signal.throwIfAborted()
+    if (installed) {
+      if (this.states[id].runtimeId === runtime.id) this.markReady(id)
+      return
+    }
+    await this.install(model, runtime.id, signal)
   }
 
   async retry(id: ModelId): Promise<void> {
@@ -209,17 +246,28 @@ export class ModelManager implements DemoController {
     if (runtime.voiceIds && !runtime.voiceIds.includes(voiceId)) {
       throw new Error(`${runtime.name} does not support ${voice.name}`)
     }
+    const changeVersion = (this.voiceChangeVersions.get(id) ?? 0) + 1
+    this.voiceChangeVersions.set(id, changeVersion)
+    const isCurrentChange = () => this.voiceChangeVersions.get(id) === changeVersion
     if (["generating", "playing"].includes(this.states[id].phase)) {
       throw new Error(`Wait for the current ${model.name} synthesis to finish before changing voices`)
     }
+    const obsoleteDownloads = [...this.voiceDownloads.entries()].filter(
+      ([key]) => key.startsWith(`${id}:`) && key !== `${id}:${voiceId}`,
+    )
+    for (const [, download] of obsoleteDownloads) download.controller.abort()
+    await Promise.allSettled(obsoleteDownloads.map(([, download]) => download.promise))
+    if (!isCurrentChange()) return
     this.patch(id, { voiceId, lastLatency: undefined, error: undefined })
     try {
       await this.ensure(id)
+      if (!isCurrentChange()) return
       await this.ensureVoice(id, voiceId)
-      if (this.states[id].voiceId === voiceId) {
+      if (isCurrentChange() && this.states[id].voiceId === voiceId) {
         this.patch(id, { phase: "ready", detail: `Voice ready: ${voice.name}` })
       }
     } catch (error) {
+      if (!isCurrentChange()) return
       const message = error instanceof Error ? error.message : String(error)
       if (this.states[id].voiceId === voiceId) {
         this.patch(id, { phase: "error", detail: message, error: message })
@@ -236,9 +284,9 @@ export class ModelManager implements DemoController {
     this.runtimeChangeVersions.set(id, changeVersion)
     const isCurrentChange = () => this.runtimeChangeVersions.get(id) === changeVersion
     if (this.states[id].runtimeId === runtimeId) {
-      const interruptedBuild = runtime.kind === "native" && this.nativeBuild?.controller.signal.aborted
-      if (interruptedBuild) {
-        await this.nativeBuild!.promise.catch(() => undefined)
+      const interruptedSetup = this.installs.get(id)
+      if (interruptedSetup?.controller.signal.aborted) {
+        await interruptedSetup.promise.catch(() => undefined)
         if (isCurrentChange()) await this.ensure(id)
       }
       return
@@ -250,12 +298,6 @@ export class ModelManager implements DemoController {
     if (activeInstall) {
       activeInstall.controller.abort()
       await activeInstall.promise.catch(() => undefined)
-      if (!isCurrentChange()) return
-    }
-    const activeNativeBuild = this.nativeBuild
-    if (activeNativeBuild && runtime.kind !== "native") {
-      activeNativeBuild.controller.abort()
-      await activeNativeBuild.promise.catch(() => undefined)
       if (!isCurrentChange()) return
     }
     const activeVoiceDownloads = [...this.voiceDownloads.entries()].filter(([key]) => key.startsWith(`${id}:`))
@@ -369,8 +411,11 @@ export class ModelManager implements DemoController {
       if (runtime.kind === "javascript") {
         await this.ensureJavascriptRuntime(model.id, runtime)
       } else if (runtime.kind === "native") {
-        await this.ensureNativeRuntime(model.id, runtime)
-      } else if (await this.isPythonInstalled(model)) {
+        const assets = runtime.assets ?? []
+        const installed = await exists(this.nativeBinaryPath())
+          && (assets.length === 0 || await this.assetsExist(model.id, assets))
+        if (installed && this.states[model.id].runtimeId === runtime.id) this.markReady(model.id)
+      } else if (await this.isPythonInstalled(model) && this.states[model.id].runtimeId === runtime.id) {
         this.markReady(model.id)
       }
     }
@@ -417,26 +462,32 @@ export class ModelManager implements DemoController {
     })
   }
 
-  private async ensureNativeRuntime(id: ModelId, runtime: RuntimeProfile): Promise<void> {
-    if (id !== "kokoro" || runtime.id !== "native-coreml-ane") {
+  private async ensureNativeRuntime(id: ModelId, runtime: RuntimeProfile, signal: AbortSignal): Promise<void> {
+    if (!runtime.nativeBackend) {
       throw new Error(`Native runtime is not configured for ${MODEL_BY_ID[id].name}`)
     }
-    if (!supportsKokoroAne(process.platform, process.arch, release())) {
-      const message = "Kokoro CoreML ANE requires macOS 14 or newer on Apple Silicon"
+    if (!supportsNativeCoreMl(process.platform, process.arch, release())) {
+      const message = `${MODEL_BY_ID[id].name} CoreML ANE requires macOS 14 or newer on Apple Silicon`
       if (this.states[id].runtimeId === runtime.id) {
         this.patch(id, { installed: false, phase: "error", detail: message, error: message })
       }
       throw new Error(message)
     }
-    if (await exists(this.nativeBinaryPath())) {
+    const assets = runtime.assets ?? []
+    const totalBytes = assets.reduce((sum, asset) => sum + asset.size, 0)
+    const [binaryReady, assetsReady] = await Promise.all([
+      exists(this.nativeBinaryPath()),
+      assets.length === 0 ? true : this.assetsExist(id, assets),
+    ])
+    if (binaryReady && assetsReady) {
       if (this.states[id].runtimeId === runtime.id) {
         this.patch(id, {
           installed: true,
           phase: "ready",
-          detail: "Ready; CoreML models download on first use",
+          detail: runtime.nativeBackend === "pocket" ? "Ready" : "Ready; CoreML models download on first use",
           setupProgress: 1,
-          downloadedBytes: 0,
-          totalBytes: 0,
+          downloadedBytes: totalBytes,
+          totalBytes,
           error: undefined,
         })
       }
@@ -445,33 +496,70 @@ export class ModelManager implements DemoController {
 
     this.patch(id, {
       installed: false,
-      phase: "setup",
-      detail: "Building pinned FluidAudio CoreML sidecar",
+      phase: assetsReady ? "setup" : "download",
+      detail: binaryReady ? "Downloading pinned CoreML assets" : "Building pinned FluidAudio CoreML sidecar",
       setupProgress: null,
       downloadedBytes: 0,
-      totalBytes: 0,
+      totalBytes,
       error: undefined,
     })
-    let build = this.nativeBuild
-    if (!build) {
+    let build = binaryReady ? undefined : this.nativeBuild
+    while (build?.controller.signal.aborted) {
+      await build.promise.catch(() => undefined)
+      if (this.nativeBuild === build) this.nativeBuild = undefined
+      build = this.nativeBuild
+    }
+    if (!binaryReady && !build) {
       const controller = new AbortController()
       const abort = () => controller.abort()
       this.controller.signal.addEventListener("abort", abort, { once: true })
+      const users = new Set<ModelId>([id])
       const promise = this.buildNativeRuntime(id, controller.signal).finally(() => {
         this.controller.signal.removeEventListener("abort", abort)
         if (this.nativeBuild?.promise === promise) this.nativeBuild = undefined
       })
-      build = { promise, controller }
+      build = { promise, controller, users }
       this.nativeBuild = build
+    } else {
+      build?.users.add(id)
     }
     try {
-      await build.promise
+      const download = assetsReady
+        ? Promise.resolve()
+        : downloadAssets(
+            assets,
+            this.assetDir(id),
+            ({ asset, completedBytes, totalBytes: downloadTotal }) => {
+              if (this.states[id].runtimeId !== runtime.id) return
+              this.patch(id, {
+                phase: "download",
+                detail: `Downloading ${asset.path}`,
+                downloadedBytes: completedBytes,
+                totalBytes: downloadTotal,
+              })
+            },
+            signal,
+          )
+      const setup = Promise.all([build?.promise, download])
+      signal.throwIfAborted()
+      let abortSetup: (() => void) | undefined
+      const aborted = new Promise<never>((_, reject) => {
+        abortSetup = () => reject(new DOMException("The operation was aborted", "AbortError"))
+        signal.addEventListener("abort", abortSetup, { once: true })
+      })
+      try {
+        await Promise.race([setup, aborted])
+      } finally {
+        if (abortSetup) signal.removeEventListener("abort", abortSetup)
+      }
       if (this.states[id].runtimeId === runtime.id) {
         this.patch(id, {
           installed: true,
           phase: "ready",
-          detail: "Ready; CoreML models download on first use",
+          detail: runtime.nativeBackend === "pocket" ? "Ready" : "Ready; CoreML models download on first use",
           setupProgress: 1,
+          downloadedBytes: totalBytes,
+          totalBytes,
         })
       }
     } catch (error) {
@@ -480,6 +568,11 @@ export class ModelManager implements DemoController {
         this.patch(id, { phase: "error", detail: message, error: message })
       }
       throw error
+    } finally {
+      if (build) {
+        build.users.delete(id)
+        if (build.users.size === 0 && this.nativeBuild === build) build.controller.abort()
+      }
     }
   }
 
@@ -494,30 +587,33 @@ export class ModelManager implements DemoController {
         "swift",
         "build",
         "--package-path",
-        KOKORO_ANE_PACKAGE,
+        FLUIDAUDIO_PACKAGE,
         "--scratch-path",
         scratch,
         "-c",
         "release",
         "--product",
-        "tts-lab-kokoro-ane",
+        "tts-lab-fluidaudio",
       ],
       {
         signal,
         logPath: this.logPath(id),
         onLine: (line) => {
-          if (this.states[id].runtimeId === "native-coreml-ane") {
+          if (this.runtime(id).kind === "native") {
             this.patch(id, { detail: line.slice(0, 120) })
           }
         },
       },
     )
     const binary = this.nativeBinaryPath()
-    if (!(await exists(binary))) throw new Error("Swift completed without producing the CoreML sidecar")
+    if (!(await exists(binary))) throw new Error("Swift completed without producing the FluidAudio sidecar")
     return binary
   }
 
   private async install(model: ModelDefinition, runtimeId: string, signal: AbortSignal): Promise<void> {
+    const python = model.python
+    const packages = model.packages
+    if (!python || !packages) throw new Error(`${model.name} does not define a Python runtime`)
     this.patch(model.id, {
       installed: false,
       phase: "bootstrap",
@@ -533,8 +629,8 @@ export class ModelManager implements DemoController {
       await mkdir(this.modelDir(model.id), { recursive: true })
       await mkdir(this.assetDir(model.id), { recursive: true })
 
-      this.patch(model.id, { phase: "setup", detail: `Installing Python ${model.python}`, setupProgress: 0.1 })
-      await runProcess([uv, "python", "install", model.python], {
+      this.patch(model.id, { phase: "setup", detail: `Installing Python ${python}`, setupProgress: 0.1 })
+      await runProcess([uv, "python", "install", python], {
         signal,
         logPath: this.logPath(model.id),
         onLine: (line) => this.patch(model.id, { detail: line.slice(0, 120) }),
@@ -542,22 +638,32 @@ export class ModelManager implements DemoController {
 
       const envDir = this.envDir(model.id)
       await rm(envDir, { recursive: true, force: true })
-      await runProcess([uv, "venv", "--python", model.python, envDir], {
+      await runProcess([uv, "venv", "--python", python, envDir], {
         signal,
         logPath: this.logPath(model.id),
         onLine: (line) => this.patch(model.id, { detail: line.slice(0, 120) }),
       })
 
       this.patch(model.id, { detail: `Installing ${model.name} runtime`, setupProgress: 0.25 })
-      await runProcess([uv, "pip", "install", "--python", envPython(envDir), ...model.packages], {
+      await runProcess([uv, "pip", "install", "--python", envPython(envDir), ...packages], {
         signal,
         logPath: this.logPath(model.id),
         env: { UV_LINK_MODE: "copy", GIT_LFS_SKIP_SMUDGE: "1" },
         onLine: (line) => this.patch(model.id, { detail: line.slice(0, 120) }),
       })
       if (model.packagesNoDeps?.length) {
+        const buildFlags = model.noBuildIsolation ? ["--no-build-isolation"] : []
         await runProcess(
-          [uv, "pip", "install", "--no-deps", "--python", envPython(envDir), ...model.packagesNoDeps],
+          [
+            uv,
+            "pip",
+            "install",
+            "--no-deps",
+            ...buildFlags,
+            "--python",
+            envPython(envDir),
+            ...model.packagesNoDeps,
+          ],
           {
             signal,
             logPath: this.logPath(model.id),
@@ -687,7 +793,10 @@ export class ModelManager implements DemoController {
   }
 
   private markReady(id: ModelId): void {
-    const totalBytes = MODEL_BY_ID[id].assets.reduce((sum, asset) => sum + asset.size, 0)
+    const model = MODEL_BY_ID[id]
+    const runtime = this.runtime(id)
+    const assets = runtime.kind === "native" ? runtime.assets ?? [] : model.assets
+    const totalBytes = assets.reduce((sum, asset) => sum + asset.size, 0)
     this.patch(id, {
       installed: true,
       phase: "ready",
@@ -736,9 +845,16 @@ export class ModelManager implements DemoController {
     let command: string[]
     let env: Record<string, string | undefined>
     if (runtime.kind === "native") {
+      if (!runtime.nativeBackend) throw new Error(`Native runtime is not configured for ${MODEL_BY_ID[id].name}`)
       const nativeHome = join(APP_HOME, "native-home")
       await mkdir(nativeHome, { recursive: true })
-      command = [this.nativeBinaryPath()]
+      command = [
+        this.nativeBinaryPath(),
+        "--backend",
+        runtime.nativeBackend,
+        "--assets",
+        this.assetDir(id),
+      ]
       env = {
         CFFIXED_USER_HOME: nativeHome,
         HOME: nativeHome,
@@ -792,7 +908,7 @@ export class ModelManager implements DemoController {
       throw new DOMException("The operation was aborted", "AbortError")
     }
     this.activeWorker = { id, runtimeId: runtime.id, worker, loadMs }
-      this.patch(id, { resident: true })
+    this.patch(id, { resident: true })
     this.refreshResourceUsage()
     return this.activeWorker
   }
@@ -889,13 +1005,21 @@ export class ModelManager implements DemoController {
     const model = MODEL_BY_ID[id]
     const voice = model.voices.find((candidate) => candidate.id === voiceId)
     if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
-    if (this.runtime(id).kind !== "python") return
+    const runtimeId = this.states[id].runtimeId
+    if (this.runtime(id).kind === "javascript") return
     if (!voice.assets?.length || (await this.assetsExist(id, voice.assets))) return
+    if (this.states[id].voiceId !== voiceId || this.states[id].runtimeId !== runtimeId) return
+    if (this.runtime(id).kind === "javascript") return
 
     const key = `${id}:${voiceId}`
     const active = this.voiceDownloads.get(key)
-    if (active) return active.promise
-    const runtimeId = this.states[id].runtimeId
+    if (active && !active.controller.signal.aborted) return active.promise
+    if (active) {
+      await active.promise.catch(() => undefined)
+      const replacement = this.voiceDownloads.get(key)
+      if (replacement) return replacement.promise
+      if (this.states[id].voiceId !== voiceId || this.states[id].runtimeId !== runtimeId) return
+    }
     const controller = new AbortController()
     const abort = () => controller.abort()
     this.controller.signal.addEventListener("abort", abort, { once: true })
@@ -924,7 +1048,7 @@ export class ModelManager implements DemoController {
       if (this.states[id].voiceId === voiceId && this.states[id].runtimeId === runtimeId) this.markReady(id)
     })().finally(() => {
       this.controller.signal.removeEventListener("abort", abort)
-      this.voiceDownloads.delete(key)
+      if (this.voiceDownloads.get(key)?.promise === operation) this.voiceDownloads.delete(key)
     })
     this.voiceDownloads.set(key, { promise: operation, controller })
     return operation
@@ -967,11 +1091,11 @@ export class ModelManager implements DemoController {
   }
 
   private nativeBuildDir(): string {
-    return join(APP_HOME, "tools", `kokoro-ane-${KOKORO_ANE_BUILD_VERSION}`)
+    return join(APP_HOME, "tools", `fluidaudio-${FLUIDAUDIO_BUILD_VERSION}`)
   }
 
   private nativeBinaryPath(): string {
-    return join(this.nativeBuildDir(), "release", "tts-lab-kokoro-ane")
+    return join(this.nativeBuildDir(), "release", "tts-lab-fluidaudio")
   }
 
   private settingsPath(): string {

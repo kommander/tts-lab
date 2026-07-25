@@ -1,4 +1,4 @@
-export type ModelId = "kokoro" | "piper" | "melo" | "parler" | "f5"
+export type ModelId = "kokoro" | "kitten" | "pocket" | "piper" | "melo" | "parler" | "f5"
 
 export type ModelPhase =
   | "idle"
