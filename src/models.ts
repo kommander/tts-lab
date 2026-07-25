@@ -14,6 +14,16 @@ export interface VoiceDefinition {
   assets?: ModelAsset[]
 }
 
+export interface RuntimeProfile {
+  id: string
+  name: string
+  description: string
+  kind: "python" | "javascript"
+  dtype?: "q8" | "fp32"
+  modelBytes?: number
+  modelFile?: string
+}
+
 export interface ModelDefinition {
   id: ModelId
   name: string
@@ -27,6 +37,8 @@ export interface ModelDefinition {
   assets: ModelAsset[]
   voices: VoiceDefinition[]
   defaultVoiceId: string
+  runtimes: RuntimeProfile[]
+  defaultRuntimeId: string
   setupVersion: string
   note: string
   requiresFfmpeg?: boolean
@@ -109,6 +121,13 @@ const parlerVoices: VoiceDefinition[] = parlerSpeakerNames.map((name, index) => 
   description: index < 20 ? "Official Mini similarity-ranked speaker" : "Official trained speaker",
 }))
 
+const pythonRuntime = (description: string): RuntimeProfile => ({
+  id: "python-pytorch-fp32",
+  name: "Python / PyTorch FP32",
+  description,
+  kind: "python",
+})
+
 export const MODELS: readonly ModelDefinition[] = [
   {
     id: "kokoro",
@@ -121,6 +140,28 @@ export const MODELS: readonly ModelDefinition[] = [
     postInstall: [["-m", "spacy", "download", "en_core_web_sm"]],
     voices: kokoroVoices,
     defaultVoiceId: "af_heart",
+    runtimes: [
+      pythonRuntime("Current Kokoro 0.9.4 pipeline; best parity with the reference implementation"),
+      {
+        id: "javascript-onnx-q8",
+        name: "JavaScript / ONNX Q8",
+        description: "92.4 MB quantized ONNX model; no Python runtime",
+        kind: "javascript",
+        dtype: "q8",
+        modelBytes: 92361116,
+        modelFile: "onnx/model_quantized.onnx",
+      },
+      {
+        id: "javascript-onnx-fp32",
+        name: "JavaScript / ONNX FP32",
+        description: "325.5 MB full-precision ONNX model; no Python runtime",
+        kind: "javascript",
+        dtype: "fp32",
+        modelBytes: 325532232,
+        modelFile: "onnx/model.onnx",
+      },
+    ],
+    defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "kokoro-0.9.4-v2",
     note: "The published package supports Python 3.10-3.12.",
     assets: [
@@ -213,6 +254,8 @@ export const MODELS: readonly ModelDefinition[] = [
       },
     ],
     defaultVoiceId: "en_US-lessac-medium",
+    runtimes: [pythonRuntime("Piper 1.6.0 native ONNX wheel")],
+    defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "piper-1.6.0-v2",
     note: "Uses the current Open Home Foundation successor, not the archived runtime.",
     assets: [
@@ -267,6 +310,8 @@ export const MODELS: readonly ModelDefinition[] = [
       { id: "EN-Default", name: "Default", description: "Default English accent" },
     ],
     defaultVoiceId: "EN-US",
+    runtimes: [pythonRuntime("MeloTTS 0.1.2 with the pinned English checkpoint")],
+    defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "melotts-2091453-v5",
     note: "Officially documented on Python 3.9. The acoustic model runs on CPU; BERT may use MPS on macOS.",
     assets: [
@@ -323,6 +368,8 @@ export const MODELS: readonly ModelDefinition[] = [
     ],
     voices: parlerVoices,
     defaultVoiceId: "Jon",
+    runtimes: [pythonRuntime("Parler-TTS 0.2.2 with Mini v1.1")],
+    defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "parler-0.2.2-v4",
     note: "0.9B FP32 model. On Apple Silicon, generation uses MPS and DAC decoding uses CPU for compatibility.",
     assets: [
@@ -373,6 +420,8 @@ export const MODELS: readonly ModelDefinition[] = [
       },
     ],
     defaultVoiceId: "nature-demo",
+    runtimes: [pythonRuntime("F5-TTS 1.1.22 with the v1 Base checkpoint")],
+    defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "f5-tts-1.1.22-v3",
     note: "Not text-only TTS: this demo uses F5's bundled reference WAV and exact transcript.",
     requiresFfmpeg: true,

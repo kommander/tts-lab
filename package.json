@@ -14,11 +14,18 @@
     "@opentui/core": "0.4.5",
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",
+    "@huggingface/transformers": "3.8.1",
     "fft.js": "4.0.4",
+    "kokoro-js": "1.2.1",
     "solid-js": "1.9.12"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.9.2"
-  }
+  },
+  "trustedDependencies": [
+    "onnxruntime-node",
+    "protobufjs",
+    "sharp"
+  ]
 }

@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
-import type { InputRenderable, KeyEvent, Renderable, TabSelectRenderable, TextareaRenderable } from "@opentui/core"
+import type {
+  InputRenderable,
+  KeyEvent,
+  Renderable,
+  SelectRenderable,
+  TabSelectRenderable,
+  TextareaRenderable,
+} from "@opentui/core"
 import type { Keymap } from "@opentui/keymap"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js"
@@ -118,6 +125,19 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const selectedVoice = createMemo(
     () => definition().voices.find((voice) => voice.id === state().voiceId) ?? definition().voices[0]!,
   )
+  const selectedRuntime = createMemo(
+    () => definition().runtimes.find((runtime) => runtime.id === state().runtimeId) ?? definition().runtimes[0]!,
+  )
+  const runtimeOptions = createMemo(() =>
+    definition().runtimes.map((runtime) => ({
+      name: runtime.name,
+      description: runtime.description,
+      value: runtime.id,
+    })),
+  )
+  const runtimeIndex = createMemo(() =>
+    Math.max(0, definition().runtimes.findIndex((runtime) => runtime.id === state().runtimeId)),
+  )
   const voiceOptions = createMemo(() =>
     definition().voices.map((voice) => ({ name: voice.name, description: voice.description, value: voice.id })),
   )
@@ -145,15 +165,17 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   })
   const keyHints = createMemo(() =>
     veryNarrow()
-      ? `${speakKeyLabel} speak  F2 save`
-      : `TAB focus  ${speakKeyLabel} speak  F2 save  CTRL+R retry  ESC quit`,
+      ? `${speakKeyLabel} speak  F2 save  F3 runtime`
+      : `TAB focus  ${speakKeyLabel} speak  F2 save  F3 runtime  CTRL+R retry  ESC quit`,
   )
   const dialogWidth = createMemo(() => Math.max(24, Math.min(76, dimensions().width - 4)))
   const [saveDialogOpen, setSaveDialogOpen] = createSignal(false)
   const [savePath, setSavePath] = createSignal("")
   const [saveError, setSaveError] = createSignal("")
   const [saving, setSaving] = createSignal(false)
+  const [runtimeDialogOpen, setRuntimeDialogOpen] = createSignal(false)
   let saveInput: InputRenderable | undefined
+  let runtimeSelect: SelectRenderable | undefined
   const options = createMemo(() =>
     MODELS.map((model) => ({
       name: `${states()[model.id].installed ? "+" : states()[model.id].phase === "error" ? "!" : " "} ${model.name}`,
@@ -200,6 +222,12 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
     queueMicrotask(() => saveInput?.focus())
   }
 
+  const openRuntimeDialog = () => {
+    setSaveDialogOpen(false)
+    setRuntimeDialogOpen(true)
+    queueMicrotask(() => runtimeSelect?.focus())
+  }
+
   const closeSaveDialog = () => {
     setSaveDialogOpen(false)
     setSaveError("")
@@ -219,8 +247,20 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
       .finally(() => setSaving(false))
   }
 
+  const closeRuntimeDialog = () => {
+    setRuntimeDialogOpen(false)
+    setFocus("editor")
+    queueMicrotask(() => editor?.focus())
+  }
+
+  const chooseRuntime = (runtimeId: string) => {
+    const modelId = selected()
+    closeRuntimeDialog()
+    void props.controller.setRuntime(modelId, runtimeId).catch(() => undefined)
+  }
+
   const disposeBindings = props.keymap.registerLayer({
-    enabled: () => !saveDialogOpen(),
+    enabled: () => !saveDialogOpen() && !runtimeDialogOpen(),
     commands: [
       {
         name: "app.quit",
@@ -264,6 +304,13 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           openSaveDialog()
         },
       },
+      {
+        name: "runtime.select.open",
+        desc: "Choose the selected model runtime",
+        run() {
+          openRuntimeDialog()
+        },
+      },
     ],
     bindings: [
       { key: "escape", cmd: "app.quit" },
@@ -272,6 +319,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
       { key: "shift+tab", cmd: "app.focus-previous" },
       { key: SPEAK_BINDING, cmd: "tts.speak" },
       { key: { name: "f2" }, cmd: "audio.save.open" },
+      { key: { name: "f3" }, cmd: "runtime.select.open" },
       { key: "ctrl+r", cmd: "model.retry" },
     ],
   })
@@ -297,9 +345,23 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
       { key: "return", cmd: "audio.save.submit" },
     ],
   })
+  const disposeRuntimeBindings = props.keymap.registerLayer({
+    enabled: () => runtimeDialogOpen(),
+    priority: 100,
+    commands: [
+      {
+        name: "runtime.select.close",
+        run() {
+          closeRuntimeDialog()
+        },
+      },
+    ],
+    bindings: [{ key: "escape", cmd: "runtime.select.close" }],
+  })
   onCleanup(() => {
     disposeBindings()
     disposeSaveBindings()
+    disposeRuntimeBindings()
   })
 
   onMount(() => {
@@ -479,6 +541,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
               <text fg={COLORS.ink} flexShrink={0}>{definition().tagline}</text>
               <text fg={COLORS.muted} flexShrink={0}>{definition().footprint} · {definition().license}</text>
               <text fg={COLORS.violet} flexShrink={0}>VOICE / {selectedVoice().name}</text>
+              <text fg={COLORS.cyan} flexShrink={0}>RUNTIME / {selectedRuntime().name}</text>
               <For each={compact() ? [] : [selectedVoice()]}>
                 {(voice) => <text fg={COLORS.muted} wrapMode="word" flexShrink={0}>{voice.description}</text>}
               </For>
@@ -592,6 +655,48 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
         <text fg={saveError() ? COLORS.red : COLORS.muted} wrapMode="word" flexShrink={0}>
           {saveError() || (saving() ? "Saving..." : "Existing files are not overwritten")}
         </text>
+      </box>
+
+      <box
+        position="absolute"
+        left="50%"
+        top="50%"
+        width={dialogWidth()}
+        height={Math.min(10, definition().runtimes.length * 2 + 4)}
+        marginLeft={-Math.floor(dialogWidth() / 2)}
+        marginTop={-Math.min(5, Math.floor((definition().runtimes.length * 2 + 4) / 2))}
+        zIndex={100}
+        visible={runtimeDialogOpen()}
+        flexDirection="column"
+        border
+        borderStyle="single"
+        borderColor={COLORS.cyan}
+        title={` ${definition().name.toUpperCase()} RUNTIME `}
+        titleColor={COLORS.cyan}
+        titleAlignment="center"
+        paddingX={1}
+        backgroundColor={COLORS.background}
+      >
+        <text fg={COLORS.muted} flexShrink={0}>Up/down choose · Enter select · Esc cancel</text>
+        <select
+          ref={(value) => (runtimeSelect = value)}
+          focused={runtimeDialogOpen()}
+          options={runtimeOptions()}
+          selectedIndex={runtimeIndex()}
+          flexGrow={1}
+          backgroundColor="transparent"
+          focusedBackgroundColor="transparent"
+          textColor={COLORS.ink}
+          focusedTextColor={COLORS.ink}
+          selectedBackgroundColor="transparent"
+          selectedTextColor={COLORS.cyan}
+          descriptionColor={COLORS.muted}
+          selectedDescriptionColor={COLORS.cyan}
+          showDescription
+          showSelectionIndicator
+          wrapSelection
+          onSelect={(_, option) => option?.value && chooseRuntime(option.value as string)}
+        />
       </box>
 
     </box>

@@ -13,6 +13,7 @@ function state(id: ModelId): ModelState {
   return {
     id,
     voiceId: MODEL_BY_ID[id].defaultVoiceId,
+    runtimeId: MODEL_BY_ID[id].defaultRuntimeId,
     installed: id === "kokoro",
     phase: id === "kokoro" ? "ready" : "idle",
     detail: id === "kokoro" ? "Ready" : "Not installed",
@@ -28,6 +29,7 @@ class FakeController implements DemoController {
   constructor(private readonly initial?: Record<ModelId, ModelState>) {}
   speakCount = 0
   voiceSelections: Array<{ model: ModelId; voiceId: string }> = []
+  runtimeSelections: Array<{ model: ModelId; runtimeId: string }> = []
   savedPaths: string[] = []
   snapshot = () =>
     this.initial ?? (Object.fromEntries(MODELS.map(({ id }) => [id, state(id)])) as Record<ModelId, ModelState>)
@@ -45,6 +47,9 @@ class FakeController implements DemoController {
   ensure = async () => undefined
   setVoice = async (model: ModelId, voiceId: string) => {
     this.voiceSelections.push({ model, voiceId })
+  }
+  setRuntime = async (model: ModelId, runtimeId: string) => {
+    this.runtimeSelections.push({ model, runtimeId })
   }
   speak = async () => {
     this.speakCount += 1
@@ -73,6 +78,7 @@ test("renders every model and the editor", async () => {
   expect(frame).toContain("VOICE BANK / Heart (US)")
   expect(frame).toContain("SCRIPT")
   expect(frame).toContain("RUNTIME SIGNAL / COLD")
+  expect(frame).toContain("RUNTIME / Python / PyTorch FP32")
   expect(frame).toContain("CTRL+G")
   expect(frame).toContain("SPECTRUM")
   expect(frame).not.toContain("five engines · private inference · native playback")
@@ -119,6 +125,16 @@ test("defines model-specific voice catalogs", () => {
   expect(MODEL_BY_ID.f5.voices).toHaveLength(1)
 })
 
+test("defines verified Kokoro runtime profiles with Python as default", () => {
+  expect(MODEL_BY_ID.kokoro.defaultRuntimeId).toBe("python-pytorch-fp32")
+  expect(MODEL_BY_ID.kokoro.runtimes.map((runtime) => runtime.id)).toEqual([
+    "python-pytorch-fp32",
+    "javascript-onnx-q8",
+    "javascript-onnx-fp32",
+  ])
+  for (const model of MODELS.slice(1)) expect(model.runtimes).toHaveLength(1)
+})
+
 test.each([
   [72, 40],
   [80, 24],
@@ -162,4 +178,11 @@ test("opens the save dialog with a generated WAV path", async () => {
   expect(controller.savedPaths).toHaveLength(1)
   expect(controller.savedPaths[0]).toStartWith(process.cwd())
   expect(controller.savedPaths[0]).toEndWith(".wav")
+})
+
+test("registers an F3 runtime selector command", async () => {
+  renderer = await renderApp(new FakeController())
+  expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).toContain("f3")
+  const result = await appKeymap?.runCommand("runtime.select.open")
+  expect(result?.ok).toBe(true)
 })

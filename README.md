@@ -6,7 +6,7 @@ A local workbench for installing, comparing, and actually using open text-to-spe
 
 - Runs Kokoro, Piper, MeloTTS, Parler-TTS, and F5-TTS through one consistent workflow.
 - Exposes model-specific voices, accents, and named speakers.
-- Installs every engine in an isolated Python environment.
+- Installs Python-backed engines in isolated environments.
 - Downloads pinned model assets with resume support, progress reporting, and checksum verification.
 - Keeps one model hot for meaningful warm-inference measurements without exhausting memory.
 - Plays generated audio locally with a live FFT spectrum.
@@ -15,7 +15,7 @@ A local workbench for installing, comparing, and actually using open text-to-spe
 ## Requirements
 
 - Bun 1.3+
-- Python 3.8+ to bootstrap the app-local `uv` installation
+- Python 3.8+ for Python-backed runtimes; Kokoro's JavaScript profiles do not require it
 - Git for MeloTTS and Parler-TTS packages
 - FFmpeg on `PATH` for F5-TTS
 - Internet access during model setup
@@ -44,6 +44,7 @@ Installing every model can require more than 15 GB because each model has an iso
 | `Tab` / `Shift+Tab` | Move focus |
 | `Ctrl+G` | Generate and play speech |
 | `F2` | Save the latest WAV |
+| `F3` | Choose the selected model runtime |
 | `Ctrl+R` | Retry failed setup |
 | `Escape` | Exit or close the save dialog |
 
@@ -58,6 +59,16 @@ Installing every model can require more than 15 GB because each model has an iso
 | F5-TTS v1 Base | Packaged reference voice; CUDA, XPU, MPS, or CPU | MIT code; CC-BY-NC-4.0 weights |
 
 F5-TTS is reference-conditioned rather than speaker-ID based. TTS Lab uses its packaged demo reference and transcript. All engines currently produce WAV output.
+
+### Kokoro Runtimes
+
+Kokoro defaults to the reference Python/PyTorch runtime. Press `F3` to switch between:
+
+- Python / PyTorch FP32: 327 MB, closest to the reference implementation.
+- JavaScript / ONNX Q8: 92 MB quantized model, no Python runtime.
+- JavaScript / ONNX FP32: 326 MB full-precision model, no Python runtime.
+
+JavaScript profiles run in-process through `kokoro-js` and Transformers.js. ONNX weights download on first use and remain cached. Runtime choices persist in `.tts-lab/settings.json`.
 
 Model, dataset, and voice licenses remain separate from this repository's license. Review them before commercial use or voice replication.
 

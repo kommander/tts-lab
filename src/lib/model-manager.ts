@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto"
-import { constants } from "node:fs"
+import { constants, readFileSync } from "node:fs"
 import { appendFile, copyFile, mkdir, readFile, rm, stat } from "node:fs/promises"
 import { dirname, extname, join, resolve } from "node:path"
 import { AudioPlayer } from "./audio-player.js"
 import { downloadAssets } from "./download.js"
+import { KokoroJsWorker } from "./kokoro-js-worker.js"
 import { commandExists, runProcess } from "./process.js"
-import { TtsWorker, type WorkerStatusEvent } from "./tts-worker.js"
-import { MODEL_BY_ID, MODELS, type ModelDefinition } from "../models.js"
+import { TtsWorker, type RuntimeWorker, type WorkerStatusEvent } from "./tts-worker.js"
+import { MODEL_BY_ID, MODELS, type ModelDefinition, type RuntimeProfile } from "../models.js"
 import type { DemoController, LatestAudio, ModelId, ModelState } from "../types.js"
 
 const PROJECT_ROOT = resolve(import.meta.dir, "../..")
@@ -40,6 +41,7 @@ export async function copyAudioExport(source: string, path: string, format: "wav
 const freshState = (id: ModelId): ModelState => ({
   id,
   voiceId: MODEL_BY_ID[id].defaultVoiceId,
+  runtimeId: MODEL_BY_ID[id].defaultRuntimeId,
   installed: false,
   phase: "idle",
   detail: "Not installed",
@@ -74,15 +76,15 @@ export class ModelManager implements DemoController {
     ModelState
   >
   private readonly listeners = new Set<(state: ModelState) => void>()
-  private readonly installs = new Map<ModelId, Promise<void>>()
-  private readonly voiceDownloads = new Map<string, Promise<void>>()
+  private readonly installs = new Map<ModelId, { promise: Promise<void>; controller: AbortController }>()
+  private readonly voiceDownloads = new Map<string, { promise: Promise<void>; controller: AbortController }>()
   private readonly audio = new AudioPlayer()
   private controller = new AbortController()
   private uvInstall?: Promise<string>
   private synthesis?: Promise<void>
   private activeAudioModel?: ModelId
-  private activeWorker?: { id: ModelId; worker: TtsWorker; loadMs: number }
-  private startingWorker?: TtsWorker
+  private activeWorker?: { id: ModelId; runtimeId: string; worker: RuntimeWorker; loadMs: number }
+  private startingWorker?: RuntimeWorker
   private latestAudio?: LatestAudio & { path: string }
 
   constructor() {
@@ -92,6 +94,7 @@ export class ModelManager implements DemoController {
         this.patch(this.activeAudioModel, { phase: "error", detail: message, error: message })
       }
     })
+    this.loadRuntimeSettings()
     void this.refresh()
   }
 
@@ -124,15 +127,26 @@ export class ModelManager implements DemoController {
   }
 
   async ensure(id: ModelId): Promise<void> {
-    if (await this.isInstalled(MODEL_BY_ID[id])) {
+    const runtime = this.runtime(id)
+    if (runtime.kind === "javascript") {
+      await this.ensureJavascriptRuntime(id, runtime)
+      return
+    }
+    if (await this.isPythonInstalled(MODEL_BY_ID[id])) {
       this.markReady(id)
       return
     }
     const active = this.installs.get(id)
-    if (active) return active
-    const install = this.install(MODEL_BY_ID[id]).finally(() => this.installs.delete(id))
-    this.installs.set(id, install)
-    return install
+    if (active) return active.promise
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    this.controller.signal.addEventListener("abort", abort, { once: true })
+    const promise = this.install(MODEL_BY_ID[id], runtime.id, controller.signal).finally(() => {
+      this.controller.signal.removeEventListener("abort", abort)
+      this.installs.delete(id)
+    })
+    this.installs.set(id, { promise, controller })
+    return promise
   }
 
   async retry(id: ModelId): Promise<void> {
@@ -164,6 +178,40 @@ export class ModelManager implements DemoController {
     }
   }
 
+  async setRuntime(id: ModelId, runtimeId: string): Promise<void> {
+    const model = MODEL_BY_ID[id]
+    const runtime = model.runtimes.find((candidate) => candidate.id === runtimeId)
+    if (!runtime) throw new Error(`Unknown ${model.name} runtime: ${runtimeId}`)
+    if (this.states[id].runtimeId === runtimeId) return
+    if (["generating", "playing"].includes(this.states[id].phase)) {
+      throw new Error(`Wait for the current ${model.name} synthesis to finish before changing runtime`)
+    }
+    const activeInstall = this.installs.get(id)
+    if (activeInstall) {
+      activeInstall.controller.abort()
+      await activeInstall.promise.catch(() => undefined)
+    }
+    const activeVoiceDownloads = [...this.voiceDownloads.entries()].filter(([key]) => key.startsWith(`${id}:`))
+    for (const [, download] of activeVoiceDownloads) download.controller.abort()
+    await Promise.allSettled(activeVoiceDownloads.map(([, download]) => download.promise))
+    if (this.activeWorker?.id === id) {
+      const active = this.activeWorker
+      this.activeWorker = undefined
+      await active.worker.stop()
+    }
+    this.patch(id, {
+      runtimeId,
+      installed: false,
+      resident: false,
+      phase: "idle",
+      detail: `Runtime selected: ${runtime.name}`,
+      lastLatency: undefined,
+      error: undefined,
+    })
+    await this.saveRuntimeSettings()
+    await this.ensure(id)
+  }
+
   async speak(id: ModelId, text: string): Promise<void> {
     if (this.synthesis) throw new Error("Another synthesis is already running")
     const operation = this.synthesize(id, text)
@@ -182,7 +230,8 @@ export class ModelManager implements DemoController {
     const outputDir = join(APP_HOME, "output")
     await mkdir(outputDir, { recursive: true })
     const output = join(outputDir, `${id}-${randomUUID()}.wav`)
-    const warm = this.activeWorker?.id === id
+    const runtimeId = this.states[id].runtimeId
+    const warm = this.activeWorker?.id === id && this.activeWorker.runtimeId === runtimeId
 
     this.patch(id, {
       phase: "generating",
@@ -223,6 +272,8 @@ export class ModelManager implements DemoController {
 
   dispose(): void {
     this.controller.abort()
+    for (const install of this.installs.values()) install.controller.abort()
+    for (const download of this.voiceDownloads.values()) download.controller.abort()
     this.startingWorker?.dispose()
     this.startingWorker = undefined
     this.activeWorker?.worker.dispose()
@@ -235,13 +286,57 @@ export class ModelManager implements DemoController {
 
   private async refresh(): Promise<void> {
     for (const model of MODELS) {
-      if (await this.isInstalled(model)) {
+      const runtime = this.runtime(model.id)
+      if (runtime.kind === "javascript") {
+        await this.ensureJavascriptRuntime(model.id, runtime)
+      } else if (await this.isPythonInstalled(model)) {
         this.markReady(model.id)
       }
     }
   }
 
-  private async install(model: ModelDefinition): Promise<void> {
+  private runtime(id: ModelId): RuntimeProfile {
+    const model = MODEL_BY_ID[id]
+    return model.runtimes.find((runtime) => runtime.id === this.states[id].runtimeId) ?? model.runtimes[0]!
+  }
+
+  private loadRuntimeSettings(): void {
+    try {
+      const settings = JSON.parse(readFileSync(this.settingsPath(), "utf8")) as { runtimes?: Record<string, string> }
+      for (const model of MODELS) {
+        const runtimeId = settings.runtimes?.[model.id]
+        if (runtimeId && model.runtimes.some((runtime) => runtime.id === runtimeId)) {
+          this.patch(model.id, { runtimeId })
+        }
+      }
+    } catch {}
+  }
+
+  private async saveRuntimeSettings(): Promise<void> {
+    await mkdir(APP_HOME, { recursive: true })
+    const runtimes = Object.fromEntries(MODELS.map((model) => [model.id, this.states[model.id].runtimeId]))
+    await Bun.write(this.settingsPath(), JSON.stringify({ runtimes }, null, 2))
+  }
+
+  private async ensureJavascriptRuntime(id: ModelId, runtime: RuntimeProfile): Promise<void> {
+    if (id !== "kokoro" || !runtime.dtype || !runtime.modelBytes || !runtime.modelFile) {
+      throw new Error(`JavaScript runtime is not configured for ${MODEL_BY_ID[id].name}`)
+    }
+    const cachedModel = join(this.javascriptCacheDir(id), "onnx-community", "Kokoro-82M-v1.0-ONNX", runtime.modelFile)
+    const cached = await stat(cachedModel).then((entry) => entry.size === runtime.modelBytes).catch(() => false)
+    if (this.states[id].runtimeId !== runtime.id) return
+    this.patch(id, {
+      installed: true,
+      phase: "ready",
+      detail: cached ? "Ready" : "Ready; ONNX model downloads on first use",
+      setupProgress: 1,
+      downloadedBytes: cached ? runtime.modelBytes : 0,
+      totalBytes: runtime.modelBytes,
+      error: undefined,
+    })
+  }
+
+  private async install(model: ModelDefinition, runtimeId: string, signal: AbortSignal): Promise<void> {
     this.patch(model.id, {
       installed: false,
       phase: "bootstrap",
@@ -259,7 +354,7 @@ export class ModelManager implements DemoController {
 
       this.patch(model.id, { phase: "setup", detail: `Installing Python ${model.python}`, setupProgress: 0.1 })
       await runProcess([uv, "python", "install", model.python], {
-        signal: this.controller.signal,
+        signal,
         logPath: this.logPath(model.id),
         onLine: (line) => this.patch(model.id, { detail: line.slice(0, 120) }),
       })
@@ -267,14 +362,14 @@ export class ModelManager implements DemoController {
       const envDir = this.envDir(model.id)
       await rm(envDir, { recursive: true, force: true })
       await runProcess([uv, "venv", "--python", model.python, envDir], {
-        signal: this.controller.signal,
+        signal,
         logPath: this.logPath(model.id),
         onLine: (line) => this.patch(model.id, { detail: line.slice(0, 120) }),
       })
 
       this.patch(model.id, { detail: `Installing ${model.name} runtime`, setupProgress: 0.25 })
       await runProcess([uv, "pip", "install", "--python", envPython(envDir), ...model.packages], {
-        signal: this.controller.signal,
+        signal,
         logPath: this.logPath(model.id),
         env: { UV_LINK_MODE: "copy", GIT_LFS_SKIP_SMUDGE: "1" },
         onLine: (line) => this.patch(model.id, { detail: line.slice(0, 120) }),
@@ -283,7 +378,7 @@ export class ModelManager implements DemoController {
         await runProcess(
           [uv, "pip", "install", "--no-deps", "--python", envPython(envDir), ...model.packagesNoDeps],
           {
-            signal: this.controller.signal,
+            signal,
             logPath: this.logPath(model.id),
             env: { UV_LINK_MODE: "copy", GIT_LFS_SKIP_SMUDGE: "1" },
             onLine: (line) => this.patch(model.id, { detail: line.slice(0, 120) }),
@@ -299,7 +394,7 @@ export class ModelManager implements DemoController {
           setupProgress: 0.55 + (postStep / model.postInstall!.length) * 0.15,
         })
         await runProcess([envPython(envDir), ...command], {
-          signal: this.controller.signal,
+          signal,
           logPath: this.logPath(model.id),
           env: {
             PATH: [dirname(envPython(envDir)), dirname(uv), Bun.env.PATH ?? ""].join(
@@ -333,7 +428,7 @@ export class ModelManager implements DemoController {
             totalBytes,
           })
         },
-        this.controller.signal,
+        signal,
       )
       await this.appendLog(model.id, "[app] Model asset download and verification complete")
 
@@ -350,7 +445,7 @@ export class ModelManager implements DemoController {
           "--check",
         ],
         {
-          signal: this.controller.signal,
+          signal,
           logPath: this.logPath(model.id),
           env: {
             HF_HOME: join(APP_HOME, "hf-cache", model.id),
@@ -361,6 +456,8 @@ export class ModelManager implements DemoController {
         },
       )
 
+      if (this.states[model.id].runtimeId !== runtimeId) return
+
       await Bun.write(this.markerPath(model.id), JSON.stringify({ version: model.setupVersion }, null, 2))
       this.patch(model.id, {
         installed: true,
@@ -370,6 +467,7 @@ export class ModelManager implements DemoController {
         downloadedBytes: model.assets.reduce((sum, asset) => sum + asset.size, 0),
       })
     } catch (error) {
+      if (signal.aborted) throw error
       const message = error instanceof Error ? error.message : String(error)
       await this.appendLog(model.id, `[app:error] ${message}`)
       this.patch(model.id, { phase: "error", detail: message, error: message })
@@ -419,13 +517,36 @@ export class ModelManager implements DemoController {
     })
   }
 
-  private async getWorker(id: ModelId): Promise<{ id: ModelId; worker: TtsWorker; loadMs: number }> {
-    if (this.activeWorker?.id === id) return this.activeWorker
+  private async getWorker(
+    id: ModelId,
+  ): Promise<{ id: ModelId; runtimeId: string; worker: RuntimeWorker; loadMs: number }> {
+    const runtime = this.runtime(id)
+    if (this.activeWorker?.id === id && this.activeWorker.runtimeId === runtime.id) return this.activeWorker
     if (this.activeWorker) {
       const previous = this.activeWorker
       this.activeWorker = undefined
       this.patch(previous.id, { resident: false })
       await previous.worker.stop()
+    }
+
+    if (runtime.kind === "javascript") {
+      if (id !== "kokoro" || !runtime.dtype || !runtime.modelBytes) {
+        throw new Error(`JavaScript runtime is not configured for ${MODEL_BY_ID[id].name}`)
+      }
+      const started = await KokoroJsWorker.start({
+        dtype: runtime.dtype,
+        cacheDir: this.javascriptCacheDir(id),
+        modelBytes: runtime.modelBytes,
+        signal: this.controller.signal,
+        onStatus: (event) => this.handleWorkerEvent(id, event),
+      })
+      this.activeWorker = { id, runtimeId: runtime.id, worker: started.worker, loadMs: started.loadMs }
+      this.patch(id, {
+        resident: true,
+        downloadedBytes: runtime.modelBytes,
+        totalBytes: runtime.modelBytes,
+      })
+      return this.activeWorker
     }
 
     let instance: TtsWorker | undefined
@@ -471,17 +592,24 @@ export class ModelManager implements DemoController {
       await worker.stop()
       throw new DOMException("The operation was aborted", "AbortError")
     }
-    this.activeWorker = { id, worker, loadMs }
+    this.activeWorker = { id, runtimeId: runtime.id, worker, loadMs }
     this.patch(id, { resident: true })
     return this.activeWorker
   }
 
   private handleWorkerEvent(id: ModelId, event: WorkerStatusEvent): void {
     if (event.type === "status" && event.detail) this.patch(id, { detail: event.detail })
-    if (event.type === "progress") this.patch(id, { generationProgress: event.progress ?? null })
+    if (event.type === "progress") {
+      this.patch(id, {
+        detail: event.detail ?? this.states[id].detail,
+        generationProgress: event.progress ?? null,
+        downloadedBytes: event.downloadedBytes ?? this.states[id].downloadedBytes,
+        totalBytes: event.totalBytes ?? this.states[id].totalBytes,
+      })
+    }
   }
 
-  private async isInstalled(model: ModelDefinition): Promise<boolean> {
+  private async isPythonInstalled(model: ModelDefinition): Promise<boolean> {
     try {
       const marker = JSON.parse(await readFile(this.markerPath(model.id), "utf8")) as { version?: string }
       if (marker.version !== model.setupVersion || !(await exists(envPython(this.envDir(model.id))))) return false
@@ -498,11 +626,16 @@ export class ModelManager implements DemoController {
     const model = MODEL_BY_ID[id]
     const voice = model.voices.find((candidate) => candidate.id === voiceId)
     if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
+    if (this.runtime(id).kind === "javascript") return
     if (!voice.assets?.length || (await this.assetsExist(id, voice.assets))) return
 
     const key = `${id}:${voiceId}`
     const active = this.voiceDownloads.get(key)
-    if (active) return active
+    if (active) return active.promise
+    const runtimeId = this.states[id].runtimeId
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    this.controller.signal.addEventListener("abort", abort, { once: true })
     const operation = (async () => {
       this.patch(id, {
         phase: "download",
@@ -515,19 +648,22 @@ export class ModelManager implements DemoController {
         voice.assets!,
         this.assetDir(id),
         ({ asset, completedBytes, totalBytes }) => {
-          if (this.states[id].voiceId !== voiceId) return
+          if (this.states[id].voiceId !== voiceId || this.states[id].runtimeId !== runtimeId) return
           this.patch(id, {
             detail: `Downloading voice ${voice.name}: ${asset.path}`,
             downloadedBytes: completedBytes,
             totalBytes,
           })
         },
-        this.controller.signal,
+        controller.signal,
       )
       await this.appendLog(id, `[app] Voice ready: ${voice.id}`)
-      if (this.states[id].voiceId === voiceId) this.markReady(id)
-    })().finally(() => this.voiceDownloads.delete(key))
-    this.voiceDownloads.set(key, operation)
+      if (this.states[id].voiceId === voiceId && this.states[id].runtimeId === runtimeId) this.markReady(id)
+    })().finally(() => {
+      this.controller.signal.removeEventListener("abort", abort)
+      this.voiceDownloads.delete(key)
+    })
+    this.voiceDownloads.set(key, { promise: operation, controller })
     return operation
   }
 
@@ -561,6 +697,14 @@ export class ModelManager implements DemoController {
 
   private markerPath(id: ModelId): string {
     return join(this.modelDir(id), "installed.json")
+  }
+
+  private javascriptCacheDir(id: ModelId): string {
+    return join(this.modelDir(id), "javascript-cache")
+  }
+
+  private settingsPath(): string {
+    return join(APP_HOME, "settings.json")
   }
 
   private logPath(id: ModelId): string {

@@ -14,6 +14,7 @@ export type ModelPhase =
 export interface ModelState {
   id: ModelId
   voiceId: string
+  runtimeId: string
   installed: boolean
   phase: ModelPhase
   detail: string
@@ -46,6 +47,7 @@ export interface DemoController {
   saveLatestAudio(path: string): Promise<string>
   ensure(model: ModelId): Promise<void>
   setVoice(model: ModelId, voiceId: string): Promise<void>
+  setRuntime(model: ModelId, runtimeId: string): Promise<void>
   speak(model: ModelId, text: string): Promise<void>
   retry(model: ModelId): Promise<void>
   dispose(): void

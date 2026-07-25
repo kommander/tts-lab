@@ -7,11 +7,19 @@ export interface WorkerStatusEvent {
   type: "status" | "progress"
   detail?: string
   progress?: number
+  downloadedBytes?: number
+  totalBytes?: number
 }
 
 export interface WorkerResult {
   output: string
   generationMs: number
+}
+
+export interface RuntimeWorker {
+  generate(text: string, output: string, voice?: string): Promise<WorkerResult>
+  dispose(): void
+  stop(): Promise<void>
 }
 
 interface WorkerOptions {
@@ -43,7 +51,7 @@ function clean(value: string): string {
   return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim()
 }
 
-export class TtsWorker {
+export class TtsWorker implements RuntimeWorker {
   readonly ready: Promise<number>
   private readonly process: Bun.Subprocess<"pipe", "pipe", "pipe">
   private readonly readyResult = Promise.withResolvers<number>()
