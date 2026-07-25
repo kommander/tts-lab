@@ -29,6 +29,17 @@ export interface ModelState {
     generationMs: number
     playbackMs: number
   }
+  runtimeStats?: {
+    sampleCount: number
+    averageGenerationMs: number
+    medianGenerationMs: number
+    minGenerationMs: number
+    maxGenerationMs: number
+    appRssBytes: number
+    appHeapUsedBytes: number
+    workerRssBytes?: number
+    workerPeakRssBytes?: number
+  }
   error?: string
 }
 

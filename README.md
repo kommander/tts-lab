@@ -9,6 +9,7 @@ A local workbench for installing, comparing, and actually using open text-to-spe
 - Installs Python-backed engines in isolated environments.
 - Downloads pinned model assets with resume support, progress reporting, and checksum verification.
 - Keeps one model hot for meaningful warm-inference measurements without exhausting memory.
+- Tracks per-runtime generation samples, average, median, range, and measurable process memory.
 - Plays generated audio locally with a live FFT spectrum.
 - Exports the latest generated audio through a simple path dialog.
 
@@ -33,6 +34,12 @@ Everything is stored under `.tts-lab/`; no global Python packages are installed.
 TTS_LAB_HOME=/path/with/free/space bun start
 ```
 
+Runtime memory is sampled immediately when a model becomes resident, then every four seconds. Configure the interval in milliseconds, or disable periodic polling with `0`:
+
+```bash
+TTS_LAB_RESOURCE_POLL_MS=5000 bun start
+```
+
 Installing every model can require more than 15 GB because each model has an isolated runtime.
 
 ## Controls
@@ -42,6 +49,7 @@ Installing every model can require more than 15 GB because each model has an iso
 | `Left` / `Right` | Browse models |
 | `Up` / `Down`, `Enter` | Choose a voice |
 | `Tab` / `Shift+Tab` | Move focus |
+| `Up` / `Down`, `Page Up` / `Page Down`, `Home` / `End` | Scroll runtime statistics when focused |
 | `Ctrl+G` | Generate and play speech |
 | `F2` | Save the latest WAV |
 | `F3` | Choose the selected model runtime |
@@ -69,6 +77,8 @@ Kokoro defaults to the reference Python/PyTorch runtime. Press `F3` to switch be
 - JavaScript / ONNX FP32: 326 MB full-precision model, no Python runtime.
 
 JavaScript profiles run in-process through `kokoro-js` and Transformers.js. ONNX weights download on first use and remain cached. Runtime choices persist in `.tts-lab/settings.json`.
+
+Runtime statistics are session-local and kept separate per model profile. Memory values are process-level: JavaScript ONNX memory is included in app RSS, while Python workers report current RSS where supported and peak RSS otherwise. They are not estimates of model tensors alone.
 
 Model, dataset, and voice licenses remain separate from this repository's license. Review them before commercial use or voice replication.
 

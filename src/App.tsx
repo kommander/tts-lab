@@ -4,6 +4,7 @@ import type {
   InputRenderable,
   KeyEvent,
   Renderable,
+  ScrollBoxRenderable,
   SelectRenderable,
   TabSelectRenderable,
   TextareaRenderable,
@@ -113,12 +114,13 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const initial = props.controller.snapshot()
   const [states, setStates] = createSignal(initial)
   const [selected, setSelected] = createSignal<ModelId>("kokoro")
-  const [focus, setFocus] = createSignal<"models" | "voices" | "editor">("models")
+  const [focus, setFocus] = createSignal<"models" | "voices" | "editor" | "runtime">("models")
   const [text, setText] = createSignal("Local speech should be simple, private, and a little bit delightful.")
   const [spectrum, setSpectrum] = createSignal(props.controller.getSpectrum())
   const [tick, setTick] = createSignal(0)
   let editor: TextareaRenderable | undefined
   let tabs: TabSelectRenderable | undefined
+  let runtimeScroll: ScrollBoxRenderable | undefined
 
   const state = createMemo(() => states()[selected()])
   const definition = createMemo(() => MODEL_BY_ID[selected()])
@@ -197,8 +199,8 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   }
 
   const moveFocus = (direction: 1 | -1) => {
-    const targets: Array<"models" | "voices" | "editor"> =
-      definition().voices.length > 1 ? ["models", "voices", "editor"] : ["models", "editor"]
+    const targets: Array<"models" | "voices" | "editor" | "runtime"> =
+      definition().voices.length > 1 ? ["models", "voices", "editor", "runtime"] : ["models", "editor", "runtime"]
     const current = Math.max(0, targets.indexOf(focus()))
     setFocus(targets[(current + direction + targets.length) % targets.length]!)
   }
@@ -358,10 +360,31 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
     ],
     bindings: [{ key: "escape", cmd: "runtime.select.close" }],
   })
+  const disposeRuntimeScrollBindings = props.keymap.registerLayer({
+    enabled: () => focus() === "runtime" && !saveDialogOpen() && !runtimeDialogOpen(),
+    priority: 50,
+    commands: [
+      { name: "runtime.scroll.up", run: () => runtimeScroll?.scrollBy(-1, "step") },
+      { name: "runtime.scroll.down", run: () => runtimeScroll?.scrollBy(1, "step") },
+      { name: "runtime.scroll.page-up", run: () => runtimeScroll?.scrollBy(-1, "viewport") },
+      { name: "runtime.scroll.page-down", run: () => runtimeScroll?.scrollBy(1, "viewport") },
+      { name: "runtime.scroll.home", run: () => runtimeScroll?.scrollTo(0) },
+      { name: "runtime.scroll.end", run: () => runtimeScroll?.scrollTo(Number.MAX_SAFE_INTEGER) },
+    ],
+    bindings: [
+      { key: "up", cmd: "runtime.scroll.up" },
+      { key: "down", cmd: "runtime.scroll.down" },
+      { key: "pageup", cmd: "runtime.scroll.page-up" },
+      { key: "pagedown", cmd: "runtime.scroll.page-down" },
+      { key: "home", cmd: "runtime.scroll.home" },
+      { key: "end", cmd: "runtime.scroll.end" },
+    ],
+  })
   onCleanup(() => {
     disposeBindings()
     disposeSaveBindings()
     disposeRuntimeBindings()
+    disposeRuntimeScrollBindings()
   })
 
   onMount(() => {
@@ -530,34 +553,42 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
             flexDirection="column"
             border
             borderStyle="single"
-            borderColor={COLORS.border}
+            borderColor={focus() === "runtime" ? COLORS.cyan : COLORS.border}
             backgroundColor="transparent"
             overflow="hidden"
             title={` RUNTIME SIGNAL / ${state().resident ? "HOT" : "COLD"} `}
-            titleColor={state().resident ? COLORS.green : COLORS.amber}
+            titleColor={focus() === "runtime" ? COLORS.cyan : state().resident ? COLORS.green : COLORS.amber}
             titleAlignment="left"
           >
-            <box flexGrow={1} flexDirection="column" paddingX={1} paddingTop={1} overflow="hidden">
+            <scrollbox
+              ref={(value) => (runtimeScroll = value)}
+              focused={focus() === "runtime"}
+              flexGrow={1}
+              scrollY
+              scrollX={false}
+              viewportCulling
+              backgroundColor="transparent"
+              contentOptions={{ flexDirection: "column", paddingX: 1, paddingTop: 1, paddingRight: 1 }}
+              verticalScrollbarOptions={{
+                visible: true,
+                trackOptions: { backgroundColor: "transparent", foregroundColor: COLORS.border },
+              }}
+              horizontalScrollbarOptions={{ visible: false }}
+            >
               <text fg={COLORS.ink} flexShrink={0}>{definition().tagline}</text>
               <text fg={COLORS.muted} flexShrink={0}>{definition().footprint} · {definition().license}</text>
               <text fg={COLORS.violet} flexShrink={0}>VOICE / {selectedVoice().name}</text>
               <text fg={COLORS.cyan} flexShrink={0}>RUNTIME / {selectedRuntime().name}</text>
-              <For each={compact() ? [] : [selectedVoice()]}>
-                {(voice) => <text fg={COLORS.muted} wrapMode="word" flexShrink={0}>{voice.description}</text>}
-              </For>
+              <text fg={COLORS.muted} wrapMode="word" flexShrink={0}>{selectedVoice().description}</text>
 
-              <For each={compact() ? [] : [true]}>{() => <box height={1} flexShrink={0} />}</For>
+              <box height={1} flexShrink={0} />
               <text fg={statusColor(state())} wrapMode="word" flexShrink={0}>
                 {state().phase.toUpperCase()} / {state().detail}
               </text>
-              <For each={compact() ? [] : [state()]}>
-                {(current) => (
-                  <text fg={current.resident ? COLORS.green : COLORS.muted} flexShrink={0}>
-                    Worker {current.resident ? "resident · warm requests enabled" : "lazy · starts on first request"}
-                  </text>
-                )}
-              </For>
-              <For each={compact() ? [] : latencyItems()}>
+              <text fg={state().resident ? COLORS.green : COLORS.muted} flexShrink={0}>
+                Worker {state().resident ? "resident · warm requests enabled" : "lazy · starts on first request"}
+              </text>
+              <For each={latencyItems()}>
                 {(latency) => (
                   <text fg={COLORS.cyan} wrapMode="word" flexShrink={0}>
                     {latency.warm ? "WARM" : "COLD"} · load {latency.warm ? "cached" : shortDuration(latency.loadMs)} · synth {shortDuration(latency.generationMs)} · audio {shortDuration(latency.playbackMs)}
@@ -565,52 +596,90 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
                 )}
               </For>
 
-            <For each={compact() ? [] : [state()]}>
-              {(current) => (
-                <>
-                  <box height={1} flexShrink={0} />
-                  <text fg={COLORS.amber} flexShrink={0}>ENVIRONMENT</text>
-                  <ProgressBar
-                    value={current.setupProgress}
-                    width={progressWidth()}
-                    tick={tick()}
-                    color={COLORS.amber}
-                  />
-                  <text fg={COLORS.muted} truncate flexShrink={0}>
-                    Assets {humanBytes(current.downloadedBytes)} / {humanBytes(current.totalBytes)}
-                  </text>
-                  <ProgressBar
-                    value={current.totalBytes ? current.downloadedBytes / current.totalBytes : 0}
-                    width={progressWidth()}
-                    tick={tick()}
-                    color={COLORS.cyan}
-                  />
-                </>
-              )}
-            </For>
-            <For each={compact() ? [state()] : []}>
-              {(current) => (
-                <text fg={COLORS.amber} truncate flexShrink={0}>
-                  ENV {Math.round((current.setupProgress ?? 0) * 100)}% · ASSETS {humanBytes(current.downloadedBytes)}
-                </text>
-              )}
-            </For>
+              <box height={1} flexShrink={0} />
+              <text fg={COLORS.green} flexShrink={0}>PERFORMANCE</text>
+              <For each={state().runtimeStats ? [state().runtimeStats!] : []}>
+                {(stats) => (
+                  <>
+                    <text fg={COLORS.ink} flexShrink={0}>Samples {stats.sampleCount}</text>
+                    <text fg={COLORS.cyan} flexShrink={0}>
+                      Generation avg {stats.sampleCount ? shortDuration(stats.averageGenerationMs) : "-"} · median {stats.sampleCount ? shortDuration(stats.medianGenerationMs) : "-"}
+                    </text>
+                    <text fg={COLORS.muted} flexShrink={0}>
+                      Range {stats.sampleCount ? `${shortDuration(stats.minGenerationMs)} - ${shortDuration(stats.maxGenerationMs)}` : "-"}
+                    </text>
+                  </>
+                )}
+              </For>
+              <For each={state().runtimeStats ? [] : [true]}>
+                {() => <text fg={COLORS.muted} flexShrink={0}>No generation samples yet</text>}
+              </For>
 
-            <For each={!compact() && state().phase === "generating" ? [state()] : []}>
-              {() => (
-                <>
-                  <text fg={COLORS.pink} flexShrink={0}>SYNTHESIS</text>
+              <box height={1} flexShrink={0} />
+              <text fg={COLORS.violet} flexShrink={0}>RESOURCES</text>
+              <For each={state().runtimeStats ? [state().runtimeStats!] : []}>
+                {(stats) => (
+                  <>
+                    <text fg={COLORS.ink} flexShrink={0}>App RSS {humanBytes(stats.appRssBytes)}</text>
+                    <text fg={COLORS.muted} flexShrink={0}>JS heap {humanBytes(stats.appHeapUsedBytes)}</text>
+                    <For each={stats.workerRssBytes ? [stats.workerRssBytes] : []}>
+                      {(rss) => <text fg={COLORS.ink} flexShrink={0}>Worker RSS {humanBytes(rss)}</text>}
+                    </For>
+                    <For each={stats.workerPeakRssBytes ? [stats.workerPeakRssBytes] : []}>
+                      {(rss) => <text fg={COLORS.muted} flexShrink={0}>Worker peak RSS {humanBytes(rss)}</text>}
+                    </For>
+                    <text fg={COLORS.muted} wrapMode="word" flexShrink={0}>Process-level memory; model-only allocation is not exposed.</text>
+                  </>
+                )}
+              </For>
+              <For each={state().runtimeStats ? [] : [true]}>
+                {() => <text fg={COLORS.muted} flexShrink={0}>Available after the runtime starts</text>}
+              </For>
+
+              <box height={1} flexShrink={0} />
+              <text fg={COLORS.amber} flexShrink={0}>ENVIRONMENT</text>
+              <ProgressBar
+                value={state().setupProgress}
+                width={progressWidth()}
+                tick={tick()}
+                color={COLORS.amber}
+              />
+              <text fg={COLORS.muted} truncate flexShrink={0}>
+                Assets {humanBytes(state().downloadedBytes)} / {humanBytes(state().totalBytes)}
+              </text>
+              <ProgressBar
+                value={state().totalBytes ? state().downloadedBytes / state().totalBytes : 0}
+                width={progressWidth()}
+                tick={tick()}
+                color={COLORS.cyan}
+              />
+
+              <For each={state().phase === "generating" ? [state()] : []}>
+                {() => (
+                  <>
+                    <text fg={COLORS.pink} flexShrink={0}>SYNTHESIS</text>
                   <ProgressBar
                     value={state().generationProgress}
                     width={progressWidth()}
                     tick={tick()}
                     color={COLORS.pink}
                   />
-                </>
-              )}
-            </For>
+                  </>
+                )}
+              </For>
 
-              <box flexGrow={1} />
+            </scrollbox>
+            <box
+              height={1}
+              flexShrink={0}
+              flexDirection="row"
+              justifyContent="flex-end"
+              paddingX={1}
+              backgroundColor="transparent"
+            >
+              <text fg={focus() === "runtime" ? COLORS.cyan : COLORS.muted} truncate>
+                SCROLL · ↑↓ · PGUP/PGDN · HOME/END
+              </text>
             </box>
           </box>
           <Spectrum levels={spectrum()} rowCount={spectrumRowCount()} />

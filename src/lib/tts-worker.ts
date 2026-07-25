@@ -16,10 +16,17 @@ export interface WorkerResult {
   generationMs: number
 }
 
+export interface RuntimeResourceUsage {
+  rssBytes?: number
+  peakRssBytes?: number
+  heapUsedBytes?: number
+}
+
 export interface RuntimeWorker {
   generate(text: string, output: string, voice?: string): Promise<WorkerResult>
   dispose(): void
   stop(): Promise<void>
+  getResourceUsage(): RuntimeResourceUsage
 }
 
 interface WorkerOptions {
@@ -39,6 +46,7 @@ interface ProtocolEvent {
   load_ms?: number
   generation_ms?: number
   error?: string
+  resource?: RuntimeResourceUsage
 }
 
 interface PendingRequest {
@@ -58,6 +66,7 @@ export class TtsWorker implements RuntimeWorker {
   private readonly pending = new Map<string, PendingRequest>()
   private readonly log: WriteStream
   private readonly stderrTail: string[] = []
+  private latestResource: RuntimeResourceUsage = {}
   private readonly startupTimer: ReturnType<typeof setTimeout>
   private disposed = false
 
@@ -136,6 +145,10 @@ export class TtsWorker implements RuntimeWorker {
     await this.process.exited
   }
 
+  getResourceUsage(): RuntimeResourceUsage {
+    return { ...this.latestResource }
+  }
+
   private async readLines(stream: ReadableStream<Uint8Array>, source: "stdout" | "stderr"): Promise<void> {
     const reader = stream.getReader()
     const decoder = new TextDecoder()
@@ -170,6 +183,7 @@ export class TtsWorker implements RuntimeWorker {
       return
     }
     if (event.type === "ready") {
+      this.latestResource = event.resource ?? this.latestResource
       clearTimeout(this.startupTimer)
       this.readyResult.resolve(event.load_ms ?? 0)
       return
@@ -189,6 +203,7 @@ export class TtsWorker implements RuntimeWorker {
     if (event.type === "status" || event.type === "progress") {
       this.options.onStatus(event as WorkerStatusEvent)
     } else if (event.type === "result") {
+      this.latestResource = event.resource ?? this.latestResource
       this.pending.delete(event.request_id)
       clearTimeout(request.timer)
       request.resolve({ output: event.output ?? "", generationMs: event.generation_ms ?? 0 })

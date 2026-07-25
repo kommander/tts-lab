@@ -14,11 +14,11 @@ test("keeps one worker alive for multiple generation requests", async () => {
   directory = await mkdtemp(join(tmpdir(), "tts-lab-worker-"))
   const script = [
     "import json, sys",
-    'print(json.dumps({"type":"ready","load_ms":125.0}), flush=True)',
+    'print(json.dumps({"type":"ready","load_ms":125.0,"resource":{"peakRssBytes":1000}}), flush=True)',
     "for line in sys.stdin:",
     " request=json.loads(line)",
     ' print(json.dumps({"type":"status","request_id":request["id"],"detail":request.get("voice", "default")}), flush=True)',
-    ' print(json.dumps({"type":"result","request_id":request["id"],"output":request["output"],"generation_ms":12.5}), flush=True)',
+    ' print(json.dumps({"type":"result","request_id":request["id"],"output":request["output"],"generation_ms":12.5,"resource":{"rssBytes":800,"peakRssBytes":1200}}), flush=True)',
   ].join("\n")
   const statuses: string[] = []
   const { worker, loadMs } = await TtsWorker.start({
@@ -29,7 +29,9 @@ test("keeps one worker alive for multiple generation requests", async () => {
   })
 
   expect(loadMs).toBe(125)
+  expect(worker.getResourceUsage()).toEqual({ peakRssBytes: 1000 })
   expect((await worker.generate("one", "one.wav", "voice-a")).generationMs).toBe(12.5)
+  expect(worker.getResourceUsage()).toEqual({ rssBytes: 800, peakRssBytes: 1200 })
   expect((await worker.generate("two", "two.wav", "voice-b")).output).toBe("two.wav")
   expect(statuses).toEqual(["voice-a", "voice-b"])
   worker.dispose()

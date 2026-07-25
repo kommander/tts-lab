@@ -2,7 +2,12 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { copyAudioExport, normalizeAudioExportPath } from "./model-manager.js"
+import {
+  copyAudioExport,
+  normalizeAudioExportPath,
+  resolveResourcePollMs,
+  summarizeGenerationTimes,
+} from "./model-manager.js"
 import { runProcess } from "./process.js"
 
 let directory = ""
@@ -14,6 +19,27 @@ afterEach(async () => {
 test("normalizes export paths to the generated format", () => {
   expect(normalizeAudioExportPath("voice", "wav")).toEndWith("voice.wav")
   expect(normalizeAudioExportPath("voice.mp3", "wav")).toEndWith("voice.wav")
+})
+
+test("summarizes generation timing samples", () => {
+  expect(summarizeGenerationTimes([])).toBeNull()
+  expect(summarizeGenerationTimes([900, 300, 500, 700])).toEqual({
+    sampleCount: 4,
+    averageGenerationMs: 600,
+    medianGenerationMs: 600,
+    minGenerationMs: 300,
+    maxGenerationMs: 900,
+  })
+  expect(summarizeGenerationTimes([100, 300, 200])?.medianGenerationMs).toBe(200)
+  expect(summarizeGenerationTimes(Array.from({ length: 60 }, (_, index) => index + 1))?.sampleCount).toBe(60)
+})
+
+test("resolves the resource polling interval", () => {
+  expect(resolveResourcePollMs(undefined)).toBe(4000)
+  expect(resolveResourcePollMs("5000")).toBe(5000)
+  expect(resolveResourcePollMs("100")).toBe(250)
+  expect(resolveResourcePollMs("0")).toBe(0)
+  expect(resolveResourcePollMs("invalid")).toBe(4000)
 })
 
 test("copies generated audio without overwriting an existing file", async () => {

@@ -13,9 +13,34 @@ import type { DemoController, LatestAudio, ModelId, ModelState } from "../types.
 const PROJECT_ROOT = resolve(import.meta.dir, "../..")
 const APP_HOME = resolve(Bun.env.TTS_LAB_HOME ?? join(PROJECT_ROOT, ".tts-lab"))
 const UV_VERSION = "0.11.32"
+const DEFAULT_RESOURCE_POLL_MS = 4000
 
 function formatDuration(milliseconds: number): string {
   return milliseconds < 1000 ? `${Math.round(milliseconds)}ms` : `${(milliseconds / 1000).toFixed(2)}s`
+}
+
+export function summarizeGenerationTimes(samples: readonly number[]) {
+  if (samples.length === 0) return null
+  const sorted = [...samples].sort((left, right) => left - right)
+  const middle = Math.floor(sorted.length / 2)
+  const median = sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!
+  return {
+    sampleCount: samples.length,
+    averageGenerationMs: samples.reduce((sum, value) => sum + value, 0) / samples.length,
+    medianGenerationMs: median,
+    minGenerationMs: sorted[0]!,
+    maxGenerationMs: sorted.at(-1)!,
+  }
+}
+
+export function resolveResourcePollMs(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_RESOURCE_POLL_MS
+  const milliseconds = Number(value)
+  if (!Number.isFinite(milliseconds) || !Number.isInteger(milliseconds) || milliseconds < 0) {
+    return DEFAULT_RESOURCE_POLL_MS
+  }
+  if (milliseconds === 0) return 0
+  return Math.max(250, milliseconds)
 }
 
 export function normalizeAudioExportPath(path: string, format: "wav"): string {
@@ -86,6 +111,8 @@ export class ModelManager implements DemoController {
   private activeWorker?: { id: ModelId; runtimeId: string; worker: RuntimeWorker; loadMs: number }
   private startingWorker?: RuntimeWorker
   private latestAudio?: LatestAudio & { path: string }
+  private readonly generationHistory = new Map<string, number[]>()
+  private readonly resourceTimer?: ReturnType<typeof setInterval>
 
   constructor() {
     this.audio.onError((message) => {
@@ -96,6 +123,11 @@ export class ModelManager implements DemoController {
     })
     this.loadRuntimeSettings()
     void this.refresh()
+    const resourcePollMs = resolveResourcePollMs(Bun.env.TTS_LAB_RESOURCE_POLL_MS)
+    if (resourcePollMs > 0) {
+      this.resourceTimer = setInterval(() => this.refreshResourceUsage(), resourcePollMs)
+      this.resourceTimer.unref?.()
+    }
   }
 
   snapshot(): Record<ModelId, ModelState> {
@@ -206,10 +238,12 @@ export class ModelManager implements DemoController {
       phase: "idle",
       detail: `Runtime selected: ${runtime.name}`,
       lastLatency: undefined,
+      runtimeStats: undefined,
       error: undefined,
     })
     await this.saveRuntimeSettings()
     await this.ensure(id)
+    this.restoreRuntimeStats(id, runtimeId)
   }
 
   async speak(id: ModelId, text: string): Promise<void> {
@@ -242,6 +276,7 @@ export class ModelManager implements DemoController {
     try {
       const worker = await this.getWorker(id)
       const result = await worker.worker.generate(cleanText, output, voiceId)
+      this.recordGeneration(id, runtimeId, result.generationMs, worker.worker)
       this.activeAudioModel = id
       this.patch(id, { phase: "playing", detail: "Starting OpenTUI audio", generationProgress: 1 })
       const playbackStarted = performance.now()
@@ -272,6 +307,7 @@ export class ModelManager implements DemoController {
 
   dispose(): void {
     this.controller.abort()
+    if (this.resourceTimer) clearInterval(this.resourceTimer)
     for (const install of this.installs.values()) install.controller.abort()
     for (const download of this.voiceDownloads.values()) download.controller.abort()
     this.startingWorker?.dispose()
@@ -525,7 +561,7 @@ export class ModelManager implements DemoController {
     if (this.activeWorker) {
       const previous = this.activeWorker
       this.activeWorker = undefined
-      this.patch(previous.id, { resident: false })
+      this.clearWorkerRss(previous.id)
       await previous.worker.stop()
     }
 
@@ -546,6 +582,7 @@ export class ModelManager implements DemoController {
         downloadedBytes: runtime.modelBytes,
         totalBytes: runtime.modelBytes,
       })
+      this.refreshResourceUsage()
       return this.activeWorker
     }
 
@@ -573,7 +610,7 @@ export class ModelManager implements DemoController {
         if (instance && this.startingWorker === instance) this.startingWorker = undefined
         if (instance && this.activeWorker?.worker === instance) {
           this.activeWorker = undefined
-          this.patch(id, { resident: false })
+          this.clearWorkerRss(id)
         }
       },
     })
@@ -594,6 +631,7 @@ export class ModelManager implements DemoController {
     }
     this.activeWorker = { id, runtimeId: runtime.id, worker, loadMs }
     this.patch(id, { resident: true })
+    this.refreshResourceUsage()
     return this.activeWorker
   }
 
@@ -607,6 +645,69 @@ export class ModelManager implements DemoController {
         totalBytes: event.totalBytes ?? this.states[id].totalBytes,
       })
     }
+  }
+
+  private recordGeneration(id: ModelId, runtimeId: string, generationMs: number, worker: RuntimeWorker): void {
+    const key = `${id}:${runtimeId}`
+    const history = this.generationHistory.get(key) ?? []
+    history.push(generationMs)
+    this.generationHistory.set(key, history)
+    const summary = summarizeGenerationTimes(history)
+    if (!summary) return
+    const appMemory = process.memoryUsage()
+    const workerMemory = worker.getResourceUsage()
+    this.patch(id, {
+      runtimeStats: {
+        ...summary,
+        appRssBytes: appMemory.rss,
+        appHeapUsedBytes: appMemory.heapUsed,
+        workerRssBytes: workerMemory.rssBytes,
+        workerPeakRssBytes: workerMemory.peakRssBytes,
+      },
+    })
+  }
+
+  private refreshResourceUsage(): void {
+    const active = this.activeWorker
+    if (!active || this.states[active.id].runtimeId !== active.runtimeId) return
+    const appMemory = process.memoryUsage()
+    const workerMemory = active.worker.getResourceUsage()
+    const current = this.states[active.id].runtimeStats
+    const historySummary = summarizeGenerationTimes(this.generationHistory.get(`${active.id}:${active.runtimeId}`) ?? [])
+    this.patch(active.id, {
+      runtimeStats: {
+        sampleCount: historySummary?.sampleCount ?? current?.sampleCount ?? 0,
+        averageGenerationMs: historySummary?.averageGenerationMs ?? current?.averageGenerationMs ?? 0,
+        medianGenerationMs: historySummary?.medianGenerationMs ?? current?.medianGenerationMs ?? 0,
+        minGenerationMs: historySummary?.minGenerationMs ?? current?.minGenerationMs ?? 0,
+        maxGenerationMs: historySummary?.maxGenerationMs ?? current?.maxGenerationMs ?? 0,
+        appRssBytes: appMemory.rss,
+        appHeapUsedBytes: appMemory.heapUsed,
+        workerRssBytes: workerMemory.rssBytes,
+        workerPeakRssBytes: workerMemory.peakRssBytes,
+      },
+    })
+  }
+
+  private restoreRuntimeStats(id: ModelId, runtimeId: string): void {
+    const summary = summarizeGenerationTimes(this.generationHistory.get(`${id}:${runtimeId}`) ?? [])
+    if (!summary) return
+    const appMemory = process.memoryUsage()
+    this.patch(id, {
+      runtimeStats: {
+        ...summary,
+        appRssBytes: appMemory.rss,
+        appHeapUsedBytes: appMemory.heapUsed,
+      },
+    })
+  }
+
+  private clearWorkerRss(id: ModelId): void {
+    const current = this.states[id].runtimeStats
+    this.patch(id, {
+      resident: false,
+      runtimeStats: current ? { ...current, workerRssBytes: undefined } : undefined,
+    })
   }
 
   private async isPythonInstalled(model: ModelDefinition): Promise<boolean> {

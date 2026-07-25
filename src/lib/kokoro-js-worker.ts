@@ -1,6 +1,6 @@
 import type { ProgressInfo } from "@huggingface/transformers"
 import type { KokoroTTS } from "kokoro-js"
-import type { RuntimeWorker, WorkerResult, WorkerStatusEvent } from "./tts-worker.js"
+import type { RuntimeResourceUsage, RuntimeWorker, WorkerResult, WorkerStatusEvent } from "./tts-worker.js"
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX"
 
@@ -72,5 +72,10 @@ export class KokoroJsWorker implements RuntimeWorker {
   async stop(): Promise<void> {
     this.dispose()
     await this.disposal
+  }
+
+  getResourceUsage(): RuntimeResourceUsage {
+    // This runtime lives in the app process; ModelManager reports it as app RSS/heap.
+    return {}
   }
 }

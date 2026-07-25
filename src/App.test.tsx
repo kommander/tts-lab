@@ -81,6 +81,7 @@ test("renders every model and the editor", async () => {
   expect(frame).toContain("RUNTIME / Python / PyTorch FP32")
   expect(frame).toContain("CTRL+G")
   expect(frame).toContain("SPECTRUM")
+  expect(frame).toContain("SCROLL · ↑↓ · PGUP/PGDN · HOME/END")
   expect(frame).not.toContain("five engines · private inference · native playback")
   expect(frame).not.toContain("The published package supports")
   expect(frame.match(/┌/g)?.length).toBeGreaterThanOrEqual(3)
@@ -148,6 +149,7 @@ test.each([
   expect(frame).toContain("RUNTIME SIGNAL")
   expect(frame).toContain("CTRL+G")
   expect(frame).toContain("SPECTRUM")
+  expect(frame).toContain("SCROLL")
   expect(frame).not.toContain("five engines · private inference · native playback")
   expect(frame.match(/┌/g)?.length).toBeGreaterThanOrEqual(3)
   expect(frame.match(/└/g)?.length).toBeGreaterThanOrEqual(3)
@@ -185,4 +187,40 @@ test("registers an F3 runtime selector command", async () => {
   expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).toContain("f3")
   const result = await appKeymap?.runCommand("runtime.select.open")
   expect(result?.ok).toBe(true)
+})
+
+test("renders technical runtime statistics", async () => {
+  const states = Object.fromEntries(MODELS.map(({ id }) => [id, state(id)])) as Record<ModelId, ModelState>
+  states.kokoro.runtimeStats = {
+    sampleCount: 4,
+    averageGenerationMs: 600,
+    medianGenerationMs: 550,
+    minGenerationMs: 300,
+    maxGenerationMs: 900,
+    appRssBytes: 256 * 1024 * 1024,
+    appHeapUsedBytes: 32 * 1024 * 1024,
+    workerPeakRssBytes: 512 * 1024 * 1024,
+  }
+  renderer = await renderApp(new FakeController(states), 160, 45)
+  await renderer.renderOnce()
+  const frame = renderer.captureCharFrame()
+  expect(frame).toContain("PERFORMANCE")
+  expect(frame).toContain("Samples 4")
+  expect(frame).toContain("Generation avg 600ms · median 550ms")
+  expect(frame).toContain("RESOURCES")
+  expect(frame).toContain("App RSS 256.0 MB")
+  expect(frame).toContain("Worker peak RSS 512.0 MB")
+})
+
+test("activates runtime scroll commands when the signal panel is focused", async () => {
+  renderer = await renderApp(new FakeController())
+  await appKeymap?.runCommand("app.focus-next")
+  await appKeymap?.runCommand("app.focus-next")
+  await appKeymap?.runCommand("app.focus-next")
+  const activeKeys = appKeymap?.getActiveKeys().map((key) => key.stroke.name) ?? []
+  expect(activeKeys).toContain("up")
+  expect(activeKeys).toContain("down")
+  expect(activeKeys).toContain("pageup")
+  expect(activeKeys).toContain("pagedown")
+  expect((await appKeymap?.runCommand("runtime.scroll.down"))?.ok).toBe(true)
 })

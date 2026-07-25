@@ -29,6 +29,25 @@ def device_name(torch: object, allow_mps: bool = True) -> str:
     return "cpu"
 
 
+def resource_snapshot() -> dict[str, int]:
+    snapshot: dict[str, int] = {}
+    try:
+        import resource
+
+        maximum = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        snapshot["peakRssBytes"] = int(maximum if sys.platform == "darwin" else maximum * 1024)
+    except (ImportError, OSError):
+        pass
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/self/statm", "r", encoding="utf-8") as statm:
+                resident_pages = int(statm.read().split()[1])
+            snapshot["rssBytes"] = resident_pages * int(os.sysconf("SC_PAGE_SIZE"))
+        except (OSError, ValueError, IndexError):
+            pass
+    return snapshot
+
+
 def prepare_melo(assets: Path):
     """Load only Melo's English frontend and redirect BERT to pinned local files."""
     from transformers import AutoModelForMaskedLM, AutoTokenizer
@@ -333,7 +352,7 @@ def serve(model_name: str, assets: Path) -> None:
         emit("fatal", error=str(error))
         traceback.print_exc(file=sys.stderr)
         raise
-    emit("ready", load_ms=round((time.perf_counter() - load_started) * 1000, 1))
+    emit("ready", load_ms=round((time.perf_counter() - load_started) * 1000, 1), resource=resource_snapshot())
 
     for line in sys.stdin:
         if not line.strip():
@@ -352,7 +371,13 @@ def serve(model_name: str, assets: Path) -> None:
             synthesize(text, output, request_id, voice_id)
             generation_ms = round((time.perf_counter() - started) * 1000, 1)
             emit_request(request_id, "progress", progress=1.0)
-            emit_request(request_id, "result", output=str(output), generation_ms=generation_ms)
+            emit_request(
+                request_id,
+                "result",
+                output=str(output),
+                generation_ms=generation_ms,
+                resource=resource_snapshot(),
+            )
         except Exception as error:
             emit_request(request_id, "error", error=str(error))
             traceback.print_exc(file=sys.stderr)
