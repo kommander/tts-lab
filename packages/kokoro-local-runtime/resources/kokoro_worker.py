@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -64,6 +65,28 @@ def check() -> None:
     emit("status", detail="Runtime import passed")
 
 
+_MISSING = object()
+
+
+def parse_parameters(value: object = _MISSING) -> float:
+    if value is _MISSING:
+        return 1.0
+    if type(value) is not dict:
+        raise ValueError("Synthesis parameters must be an object")
+    unknown = set(value) - {"speed"}
+    if unknown:
+        raise ValueError(f"Unknown synthesis parameter: {sorted(unknown)[0]}")
+    speed = value.get("speed", 1.0)
+    if type(speed) not in (int, float) or not math.isfinite(speed):
+        raise ValueError("speed must be a finite number")
+    if speed < 0.5 or speed > 2.0:
+        raise ValueError("speed must be between 0.5 and 2")
+    steps = (speed - 0.5) / 0.1
+    if not math.isclose(steps, round(steps), rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError("speed must use increments of 0.1")
+    return float(speed)
+
+
 def load_kokoro(assets: Path):
     import numpy as np
     import soundfile as sf
@@ -80,7 +103,13 @@ def load_kokoro(assets: Path):
     pipelines = {"a": KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", model=model)}
     pipelines["a"].load_voice(str(assets / "voices" / "af_heart.pt"))
 
-    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+    def synthesize(
+        text: str,
+        output: Path,
+        request_id: str | None = None,
+        voice_id: str | None = None,
+        speed: float = 1.0,
+    ) -> None:
         voice_id = voice_id or "af_heart"
         lang_code = "b" if voice_id.startswith("b") else "a"
         if lang_code not in pipelines:
@@ -89,7 +118,7 @@ def load_kokoro(assets: Path):
         voice = str(assets / "voices" / f"{voice_id}.pt")
         emit_request(request_id, "status", detail=f"Synthesizing with Kokoro {voice_id} on {device}")
         chunks = []
-        for index, result in enumerate(pipeline(text, voice=voice), start=1):
+        for index, result in enumerate(pipeline(text, voice=voice, speed=speed), start=1):
             if result.audio is not None:
                 chunks.append(result.audio.numpy())
             emit_request(request_id, "progress", progress=min(0.95, index / (index + 1)))
@@ -120,11 +149,12 @@ def serve(assets: Path) -> None:
             text = str(request["text"]).strip()
             output = Path(request["output"])
             voice_id = request.get("voice")
+            speed = parse_parameters(request["parameters"]) if "parameters" in request else parse_parameters()
             if not text:
                 raise ValueError("No text was provided")
             output.parent.mkdir(parents=True, exist_ok=True)
             started = time.perf_counter()
-            synthesize(text, output, request_id, voice_id)
+            synthesize(text, output, request_id, voice_id, speed)
             emit_request(request_id, "progress", progress=1.0)
             emit_request(
                 request_id,

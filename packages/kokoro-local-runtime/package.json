@@ -33,6 +33,7 @@
     "swift/Package.swift",
     "swift/Package.resolved",
     "swift/Sources/TtsLabFluidAudio/main.swift",
+    "swift/Tests/TtsLabFluidAudioTests/ParameterDecodingTests.swift",
     "voices",
     "LICENSE",
     "LICENSE-APACHE-2.0",

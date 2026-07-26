@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   KOKORO_ASSETS,
+  KOKORO_DEFAULT_PARAMETERS,
   KOKORO_MODEL,
   KOKORO_RUNTIME_IDS,
   KOKORO_SETUP_VERSION,
@@ -13,6 +14,7 @@ import {
   createKokoro,
   getJavascriptLoadOptions,
   getKokoroCapability,
+  normalizeKokoroSynthesisParameters,
 } from "../dist/index.js"
 import { KokoroJavascriptWorker } from "../dist/javascript-worker.js"
 
@@ -35,6 +37,30 @@ test("owns the stable catalog and runtime IDs", () => {
   ])
   assert.equal(KOKORO_MODEL.runtimes.find(({ id }) => id === "javascript-onnx-fp32").lowMemory, true)
   assert.deepEqual(KOKORO_MODEL.runtimes.find(({ id }) => id === "native-coreml-ane").voiceIds, ["af_heart"])
+  assert.deepEqual(KOKORO_DEFAULT_PARAMETERS, { speed: 1 })
+  for (const runtime of KOKORO_MODEL.runtimes) {
+    assert.deepEqual(runtime.parameters, [{
+      id: "speed",
+      label: "Speed",
+      description: "Speech speed multiplier",
+      type: "number",
+      default: 1,
+      min: 0.5,
+      max: 2,
+      step: 0.1,
+    }])
+  }
+})
+
+test("normalizes Kokoro speed and reports invalid parameters with a stable code", () => {
+  assert.deepEqual(normalizeKokoroSynthesisParameters(), { speed: 1 })
+  assert.deepEqual(normalizeKokoroSynthesisParameters({ speed: 1.4 }), { speed: 1.4 })
+  for (const parameters of [{ speed: false }, { speed: 0.4 }, { speed: 1.05 }, { pitch: 1 }]) {
+    assert.throws(
+      () => normalizeKokoroSynthesisParameters(parameters, "javascript-onnx-q8"),
+      (error) => error.code === "INVALID_PARAMETER" && error.runtimeId === "javascript-onnx-q8",
+    )
+  }
 })
 
 test("reports runtime capabilities", () => {
@@ -226,11 +252,15 @@ test("disposal cancels and joins an in-flight JavaScript load", async () => {
 test("tracks and removes the wrapper returned from JavaScript start", async () => {
   directory = await mkdtemp(join(tmpdir(), "kokoro-worker-tracking-"))
   const originalStart = KokoroJavascriptWorker.start
+  let generated
   try {
     KokoroJavascriptWorker.start = async (options) => {
       let stopped = false
       const worker = {
-        generate: async () => ({ output: "", generationMs: 0 }),
+        generate: async (...args) => {
+          generated = args
+          return { output: args[1], generationMs: 0 }
+        },
         dispose: () => undefined,
         stop: async () => {
           if (stopped) return
@@ -244,6 +274,11 @@ test("tracks and removes the wrapper returned from JavaScript start", async () =
     const runtime = createKokoro({ homeDir: directory })
     const started = await runtime.start("javascript-onnx-q8")
     assert.equal(runtime.workers.has(started.worker), true)
+    await started.worker.generate("hello", "output.wav", "af_heart", { speed: 1.3 })
+    assert.deepEqual(generated, ["hello", "output.wav", "af_heart", { speed: 1.3 }])
+    assert.throws(() => started.worker.generate("hello", "output.wav", "af_heart", { speed: 3 }), (error) => {
+      return error.code === "INVALID_PARAMETER"
+    })
     await started.worker.stop()
     assert.equal(runtime.workers.size, 0)
     await runtime.dispose()

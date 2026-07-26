@@ -1,9 +1,22 @@
-import type { Asset } from "./core/index.js"
+import type { Asset, SynthesisParameterDefinition } from "./core/index.js"
 
 export const KOKORO_REVISION = "f3ff3571791e39611d31c381e3a41a3af07b4987" as const
 export const KOKORO_SETUP_VERSION = "kokoro-0.9.4-v2" as const
 export const KOKORO_DEFAULT_VOICE_ID = "af_heart" as const
 export const KOKORO_DEFAULT_RUNTIME_ID = "python-pytorch-fp32" as const
+
+export const KOKORO_PARAMETER_DEFINITIONS = [{
+  id: "speed",
+  label: "Speed",
+  description: "Speech speed multiplier",
+  type: "number",
+  default: 1,
+  min: 0.5,
+  max: 2,
+  step: 0.1,
+}] as const satisfies readonly SynthesisParameterDefinition[]
+
+export const KOKORO_DEFAULT_PARAMETERS = { speed: 1 } as const
 
 export const KOKORO_RUNTIME_IDS = [
   "python-pytorch-fp32",
@@ -36,6 +49,7 @@ export interface KokoroRuntimeDescriptor {
   modelFile?: string
   voiceIds?: readonly KokoroVoiceId[]
   nativeBackend?: "kokoro"
+  parameters: readonly SynthesisParameterDefinition[]
 }
 
 const hf = (path: string) =>
@@ -110,6 +124,7 @@ export const KOKORO_RUNTIMES: KokoroRuntimeDescriptor[] = [
     name: "Python / PyTorch FP32",
     description: "Current Kokoro 0.9.4 pipeline; best parity with the reference implementation",
     kind: "python",
+    parameters: KOKORO_PARAMETER_DEFINITIONS,
   },
   {
     id: "javascript-onnx-q8",
@@ -120,6 +135,7 @@ export const KOKORO_RUNTIMES: KokoroRuntimeDescriptor[] = [
     device: "cpu",
     modelBytes: 92361116,
     modelFile: "onnx/model_quantized.onnx",
+    parameters: KOKORO_PARAMETER_DEFINITIONS,
   },
   {
     id: "javascript-onnx-fp32",
@@ -131,6 +147,7 @@ export const KOKORO_RUNTIMES: KokoroRuntimeDescriptor[] = [
     lowMemory: true,
     modelBytes: 325532232,
     modelFile: "onnx/model.onnx",
+    parameters: KOKORO_PARAMETER_DEFINITIONS,
   },
   {
     id: "javascript-webgpu-fp32",
@@ -141,6 +158,7 @@ export const KOKORO_RUNTIMES: KokoroRuntimeDescriptor[] = [
     device: "webgpu",
     modelBytes: 325532232,
     modelFile: "onnx/model.onnx",
+    parameters: KOKORO_PARAMETER_DEFINITIONS,
   },
   {
     id: "native-coreml-ane",
@@ -149,6 +167,7 @@ export const KOKORO_RUNTIMES: KokoroRuntimeDescriptor[] = [
     kind: "native",
     nativeBackend: "kokoro",
     voiceIds: [KOKORO_DEFAULT_VOICE_ID],
+    parameters: KOKORO_PARAMETER_DEFINITIONS,
   },
 ]
 

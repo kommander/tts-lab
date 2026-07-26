@@ -14,12 +14,19 @@ await kokoro.prepare("javascript-onnx-q8", {
 })
 
 const started = await kokoro.start("javascript-onnx-q8")
-await started.worker.generate("Hello from Kokoro.", "/tmp/hello.wav", "af_heart")
+await started.worker.generate(
+  "Hello from Kokoro.",
+  "/tmp/hello.wav",
+  "af_heart",
+  { speed: 1.2 },
+)
 await started.worker.stop()
 await kokoro.dispose()
 ```
 
 `homeDir` is required. The package never reads `TTS_LAB_HOME`, plays audio, or downloads/builds during import. `prepare()` is the explicit setup boundary and accepts an `AbortSignal`.
+
+The optional fourth worker argument contains strictly validated request-scoped synthesis parameters. Every Kokoro profile currently exposes `speed` from `0.5` to `2.0` in `0.1` increments. Parameter changes do not reload the model.
 
 Two deliberate subpaths expose facilities needed by other local TTS engines:
 
@@ -28,7 +35,7 @@ import { downloadAssets, NdjsonRuntimeWorker } from "kokoro-local-runtime/core"
 import { FluidAudioBuilder } from "kokoro-local-runtime/fluidaudio"
 ```
 
-`core` contains resumable downloads, process-tree cancellation, shared uv bootstrap, and the concurrent NDJSON worker. `fluidaudio` contains the shared lazy builder and backend command helpers. Kokoro and Pocket use the same `FluidAudioBuilder`, pinned Swift package, cache path `<homeDir>/tools/fluidaudio-0.15.5-v2`, and `tts-lab-fluidaudio` product.
+`core` contains resumable downloads, process-tree cancellation, shared uv bootstrap, and the concurrent NDJSON worker. `fluidaudio` contains the shared lazy builder and backend command helpers. Kokoro and Pocket use the same `FluidAudioBuilder`, pinned Swift package, cache path `<homeDir>/tools/fluidaudio-0.15.5-v3`, and `tts-lab-fluidaudio` product.
 
 ## Profiles
 

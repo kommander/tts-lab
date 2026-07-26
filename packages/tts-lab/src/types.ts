@@ -1,3 +1,5 @@
+import type { SynthesisParameters } from "kokoro-local-runtime/core"
+
 export type ModelId = "kokoro" | "kitten" | "pocket" | "qwen" | "piper" | "melo" | "parler" | "f5"
 
 export type ModelPhase =
@@ -15,6 +17,7 @@ export interface ModelState {
   id: ModelId
   voiceId: string
   runtimeId: string
+  synthesisParameters: SynthesisParameters
   installed: boolean
   phase: ModelPhase
   detail: string
@@ -59,6 +62,11 @@ export interface DemoController {
   ensure(model: ModelId): Promise<void>
   setVoice(model: ModelId, voiceId: string): Promise<void>
   setRuntime(model: ModelId, runtimeId: string): Promise<void>
+  setSynthesisParameters(
+    model: ModelId,
+    expectedRuntimeId: string,
+    parameters: SynthesisParameters,
+  ): Promise<void>
   speak(model: ModelId, text: string): Promise<void>
   retry(model: ModelId): Promise<void>
   dispose(): Promise<void>

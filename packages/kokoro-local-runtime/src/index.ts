@@ -1,8 +1,10 @@
 export {
   KOKORO_ASSETS,
   KOKORO_DEFAULT_RUNTIME_ID,
+  KOKORO_DEFAULT_PARAMETERS,
   KOKORO_DEFAULT_VOICE_ID,
   KOKORO_MODEL,
+  KOKORO_PARAMETER_DEFINITIONS,
   KOKORO_REVISION,
   KOKORO_RUNTIMES,
   KOKORO_RUNTIME_IDS,
@@ -24,6 +26,7 @@ export {
   createKokoro,
   ensureVoice,
   getKokoroCapability,
+  normalizeKokoroSynthesisParameters,
   prepare,
   start,
   synthesize,
@@ -43,5 +46,18 @@ export type {
   KokoroStartOptions,
   KokoroSynthesisResult,
   KokoroSynthesizeOptions,
+  KokoroWorker,
 } from "./runtime.js"
-export type { RuntimeResourceUsage, RuntimeWorker, WorkerResult, WorkerStatusEvent } from "./core/index.js"
+export type {
+  RuntimeResourceUsage,
+  RuntimeWorker,
+  SynthesisBooleanParameterDefinition,
+  SynthesisEnumParameterDefinition,
+  SynthesisEnumParameterOption,
+  SynthesisNumberParameterDefinition,
+  SynthesisParameterDefinition,
+  SynthesisParameterValue,
+  SynthesisParameters,
+  WorkerResult,
+  WorkerStatusEvent,
+} from "./core/index.js"

@@ -1,4 +1,4 @@
-import type { Asset } from "kokoro-local-runtime/core"
+import type { Asset, SynthesisParameterDefinition } from "kokoro-local-runtime/core"
 import { KOKORO_MODEL } from "kokoro-local-runtime"
 import type { ModelId } from "./types.js"
 
@@ -29,6 +29,7 @@ export interface RuntimeProfile {
   platforms?: readonly NodeJS.Platform[]
   platformDescription?: string
   minimumMemoryBytes?: number
+  parameters: readonly SynthesisParameterDefinition[]
 }
 
 export interface ModelDefinition {
@@ -147,11 +148,120 @@ const qwenVoices: VoiceDefinition[] = [
   ["dylan", "Dylan", "Chinese male; Beijing dialect profile"],
 ].map(([id, name, description]) => ({ id, name, description }))
 
-const pythonRuntime = (description: string): RuntimeProfile => ({
+export const KITTEN_PARAMETER_DEFINITIONS = [{
+  id: "speed",
+  label: "Speed",
+  type: "number",
+  default: 1,
+  min: 0.5,
+  max: 2,
+  step: 0.05,
+}] as const satisfies readonly SynthesisParameterDefinition[]
+
+export const POCKET_PARAMETER_DEFINITIONS = [
+  {
+    id: "temperature",
+    label: "Temperature",
+    type: "enum",
+    default: "stable",
+    options: [
+      { value: "deterministic", label: "Deterministic" },
+      { value: "stable", label: "Stable" },
+      { value: "upstream", label: "Upstream" },
+    ],
+  },
+  { id: "deEss", label: "De-ess", type: "boolean", default: true },
+] as const satisfies readonly SynthesisParameterDefinition[]
+
+export const QWEN_PARAMETER_DEFINITIONS = [
+  {
+    id: "temperature",
+    label: "Temperature",
+    type: "enum",
+    default: "stable",
+    options: [
+      { value: "stable", label: "Stable" },
+      { value: "expressive", label: "Expressive" },
+    ],
+  },
+  { id: "seed", label: "Seed", type: "number", default: 42, min: 0, max: 2147483647, step: 1 },
+] as const satisfies readonly SynthesisParameterDefinition[]
+
+export const PIPER_PARAMETER_DEFINITIONS = [{
+  id: "speed",
+  label: "Speed",
+  type: "enum",
+  default: "normal",
+  options: [
+    { value: "slow", label: "Slow" },
+    { value: "normal", label: "Normal" },
+    { value: "fast", label: "Fast" },
+  ],
+}] as const satisfies readonly SynthesisParameterDefinition[]
+
+export const MELO_PARAMETER_DEFINITIONS = [{
+  id: "speed",
+  label: "Speed",
+  type: "number",
+  default: 1,
+  min: 0.1,
+  max: 10,
+  step: 0.1,
+}] as const satisfies readonly SynthesisParameterDefinition[]
+
+export const PARLER_PARAMETER_DEFINITIONS = [
+  {
+    id: "rate",
+    label: "Rate",
+    type: "enum",
+    default: "moderate",
+    options: [
+      { value: "slow", label: "Slow" },
+      { value: "moderate", label: "Moderate" },
+      { value: "fast", label: "Fast" },
+    ],
+  },
+  {
+    id: "pitch",
+    label: "Pitch",
+    type: "enum",
+    default: "natural",
+    options: [
+      { value: "low", label: "Low" },
+      { value: "natural", label: "Natural" },
+      { value: "high", label: "High" },
+    ],
+  },
+  {
+    id: "expression",
+    label: "Expression",
+    type: "enum",
+    default: "slight",
+    options: [
+      { value: "neutral", label: "Neutral" },
+      { value: "slight", label: "Slight" },
+      { value: "expressive", label: "Expressive" },
+    ],
+  },
+] as const satisfies readonly SynthesisParameterDefinition[]
+
+export const F5_PARAMETER_DEFINITIONS = [
+  { id: "speed", label: "Speed", type: "number", default: 1, min: 0.3, max: 2, step: 0.1 },
+  { id: "nfeSteps", label: "NFE steps", type: "number", default: 32, min: 4, max: 64, step: 2 },
+  { id: "seed", label: "Seed", type: "number", default: 42, min: 0, max: 2147483647, step: 1 },
+  { id: "crossFade", label: "Cross-fade", type: "number", default: 0.15, min: 0, max: 1, step: 0.01 },
+  { id: "removeSilence", label: "Remove silence", type: "boolean", default: false },
+] as const satisfies readonly SynthesisParameterDefinition[]
+
+const pythonRuntime = (
+  description: string,
+  parameters: readonly SynthesisParameterDefinition[],
+): RuntimeProfile => ({
   id: "python-pytorch-fp32",
   name: "Python / PyTorch FP32",
   description,
   kind: "python",
+  parameters,
 })
 
 export const MODELS: readonly ModelDefinition[] = [
@@ -214,6 +324,7 @@ export const MODELS: readonly ModelDefinition[] = [
       device: "cpu",
       darwinArch: "arm64",
       minimumDarwinMajor: 23,
+      parameters: KITTEN_PARAMETER_DEFINITIONS,
     }],
     defaultRuntimeId: "python-onnx-int8",
     setupVersion: "kitten-9f3e0d8-nano-int8-v2",
@@ -254,6 +365,7 @@ export const MODELS: readonly ModelDefinition[] = [
       kind: "native",
       nativeBackend: "pocket",
       assets: pocketAssets,
+      parameters: POCKET_PARAMETER_DEFINITIONS,
     }],
     defaultRuntimeId: "native-coreml-ane-fp16",
     setupVersion: "pocket-fluid-0.15.5-ane-v1",
@@ -323,6 +435,7 @@ export const MODELS: readonly ModelDefinition[] = [
       minimumDarwinMajor: 23,
       minimumMemoryBytes: 16 * 1024 ** 3,
       platformDescription: "macOS 14+ on Apple Silicon with at least 16 GB memory",
+      parameters: QWEN_PARAMETER_DEFINITIONS,
     }],
     defaultRuntimeId: "python-mlx-4bit",
     setupVersion: "qwen3-tts-0.6b-custom-mlx-4bit-v1",
@@ -407,7 +520,7 @@ export const MODELS: readonly ModelDefinition[] = [
       },
     ],
     defaultVoiceId: "en_US-lessac-medium",
-    runtimes: [pythonRuntime("Piper 1.6.0 native ONNX wheel")],
+    runtimes: [pythonRuntime("Piper 1.6.0 native ONNX wheel", PIPER_PARAMETER_DEFINITIONS)],
     defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "piper-1.6.0-v2",
     note: "Uses the current Open Home Foundation successor, not the archived runtime.",
@@ -463,7 +576,7 @@ export const MODELS: readonly ModelDefinition[] = [
       { id: "EN-Default", name: "Default", description: "Default English accent" },
     ],
     defaultVoiceId: "EN-US",
-    runtimes: [pythonRuntime("MeloTTS 0.1.2 with the pinned English checkpoint")],
+    runtimes: [pythonRuntime("MeloTTS 0.1.2 with the pinned English checkpoint", MELO_PARAMETER_DEFINITIONS)],
     defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "melotts-2091453-v5",
     note: "Officially documented on Python 3.9. The acoustic model runs on CPU; BERT may use MPS on macOS.",
@@ -521,7 +634,7 @@ export const MODELS: readonly ModelDefinition[] = [
     ],
     voices: parlerVoices,
     defaultVoiceId: "Jon",
-    runtimes: [pythonRuntime("Parler-TTS 0.2.2 with Mini v1.1")],
+    runtimes: [pythonRuntime("Parler-TTS 0.2.2 with Mini v1.1", PARLER_PARAMETER_DEFINITIONS)],
     defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "parler-0.2.2-v4",
     note: "0.9B FP32 model. On Apple Silicon, generation uses MPS and DAC decoding uses CPU for compatibility.",
@@ -573,7 +686,7 @@ export const MODELS: readonly ModelDefinition[] = [
       },
     ],
     defaultVoiceId: "nature-demo",
-    runtimes: [pythonRuntime("F5-TTS 1.1.22 with the v1 Base checkpoint")],
+    runtimes: [pythonRuntime("F5-TTS 1.1.22 with the v1 Base checkpoint", F5_PARAMETER_DEFINITIONS)],
     defaultRuntimeId: "python-pytorch-fp32",
     setupVersion: "f5-tts-1.1.22-v3",
     note: "Not text-only TTS: this demo uses F5's bundled reference WAV and exact transcript.",

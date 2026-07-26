@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { constants, readFileSync } from "node:fs"
-import { appendFile, copyFile, mkdir, readFile, rm, stat } from "node:fs/promises"
+import { appendFile, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { release, totalmem } from "node:os"
 import { dirname, extname, join, resolve } from "node:path"
 import {
@@ -22,9 +22,16 @@ import {
   downloadAssets,
   runProcess,
   type RuntimeWorker,
+  type SynthesisParameters,
   type WorkerStatusEvent,
 } from "kokoro-local-runtime/core"
 import { AudioPlayer } from "./audio-player.js"
+import {
+  getDefaultModelSynthesisParameters,
+  normalizeModelSynthesisParameters,
+  recoverModelSynthesisParameters,
+  serializeModelSynthesisParameters,
+} from "./synthesis-parameters.js"
 import { MODEL_BY_ID, MODELS, type ModelDefinition, type RuntimeProfile } from "../models.js"
 import type { DemoController, LatestAudio, ModelId, ModelState } from "../types.js"
 
@@ -98,6 +105,33 @@ export async function copyAudioExport(source: string, path: string, format: "wav
   return destination
 }
 
+export function getSynthesisConfigurationKey(
+  id: ModelId,
+  runtimeId: string,
+  voiceId: string,
+  parameters: SynthesisParameters,
+): string {
+  return JSON.stringify([id, runtimeId, voiceId, serializeModelSynthesisParameters(id, parameters, runtimeId)])
+}
+
+type PersistedSynthesisParameters = Record<string, Record<string, SynthesisParameters>>
+
+interface SettingsV2 {
+  version: 2
+  runtimes: Record<string, string>
+  synthesisParameters: PersistedSynthesisParameters
+}
+
+function defaultPersistedSynthesisParameters(): PersistedSynthesisParameters {
+  return Object.fromEntries(MODELS.map((model) => [
+    model.id,
+    Object.fromEntries(model.runtimes.map((runtime) => [
+      runtime.id,
+      getDefaultModelSynthesisParameters(model.id, runtime.id),
+    ])),
+  ]))
+}
+
 const freshState = (id: ModelId): ModelState => {
   const model = MODEL_BY_ID[id]
   const runtime = model.runtimes.find((candidate) => candidate.id === model.defaultRuntimeId) ?? model.runtimes[0]!
@@ -106,6 +140,7 @@ const freshState = (id: ModelId): ModelState => {
     id,
     voiceId: model.defaultVoiceId,
     runtimeId: model.defaultRuntimeId,
+    synthesisParameters: getDefaultModelSynthesisParameters(id, model.defaultRuntimeId),
     installed: false,
     phase: "idle",
     detail: "Not installed",
@@ -152,9 +187,16 @@ export class ModelManager implements DemoController {
   private startingWorker?: RuntimeWorker
   private latestAudio?: LatestAudio & { path: string }
   private readonly generationHistory = new Map<string, number[]>()
+  private readonly persistedSynthesisParameters = defaultPersistedSynthesisParameters()
   private readonly runtimeChangeVersions = new Map<ModelId, number>()
   private readonly voiceChangeVersions = new Map<ModelId, number>()
+  private readonly configurationTails = new Map<ModelId, Promise<void>>()
   private readonly resourceTimer?: ReturnType<typeof setInterval>
+  private persistedMutationTail: Promise<void> = Promise.resolve()
+  private settingsWrites: Promise<void> = Promise.resolve()
+  private readonly refreshOperation: Promise<void>
+  private disposed = false
+  private disposal?: Promise<void>
 
   constructor() {
     this.audio.onError((message) => {
@@ -164,7 +206,7 @@ export class ModelManager implements DemoController {
       }
     })
     this.loadRuntimeSettings()
-    void this.refresh().catch(() => undefined)
+    this.refreshOperation = this.refresh().catch(() => undefined)
     const resourcePollMs = resolveResourcePollMs(Bun.env.TTS_LAB_RESOURCE_POLL_MS)
     if (resourcePollMs > 0) {
       this.resourceTimer = setInterval(() => this.refreshResourceUsage(), resourcePollMs)
@@ -173,7 +215,10 @@ export class ModelManager implements DemoController {
   }
 
   snapshot(): Record<ModelId, ModelState> {
-    return Object.fromEntries(MODELS.map(({ id }) => [id, { ...this.states[id] }])) as Record<ModelId, ModelState>
+    return Object.fromEntries(MODELS.map(({ id }) => [id, {
+      ...this.states[id],
+      synthesisParameters: { ...this.states[id].synthesisParameters },
+    }])) as Record<ModelId, ModelState>
   }
 
   subscribe(listener: (state: ModelState) => void): () => void {
@@ -196,11 +241,13 @@ export class ModelManager implements DemoController {
   }
 
   async saveLatestAudio(path: string): Promise<string> {
+    this.throwIfDisposed()
     if (!this.latestAudio) throw new Error("Generate audio before saving it")
     return copyAudioExport(this.latestAudio.path, path, this.latestAudio.format)
   }
 
   async ensure(id: ModelId): Promise<void> {
+    this.throwIfDisposed()
     const runtime = this.runtime(id)
     if (!supportsRuntimePlatform(runtime, process.platform, process.arch, release())) {
       const message = `${MODEL_BY_ID[id].name} requires ${runtime.platformDescription ?? "macOS 14 or newer on Apple Silicon"}`
@@ -213,12 +260,12 @@ export class ModelManager implements DemoController {
     if (active) {
       active.controller.abort()
       await active.promise.catch(() => undefined)
+      this.throwIfDisposed()
     }
     const controller = new AbortController()
-    const abort = () => controller.abort()
-    this.controller.signal.addEventListener("abort", abort, { once: true })
+    const unlink = this.linkController(controller)
     const promise = this.prepareRuntime(id, runtime, controller.signal).finally(() => {
-      this.controller.signal.removeEventListener("abort", abort)
+      unlink()
       if (this.installs.get(id)?.promise === promise) this.installs.delete(id)
     })
     this.installs.set(id, { runtimeId: runtime.id, promise, controller })
@@ -267,41 +314,53 @@ export class ModelManager implements DemoController {
   }
 
   async retry(id: ModelId): Promise<void> {
+    this.throwIfDisposed()
     if (this.states[id].phase !== "error") return
     this.patch(id, { phase: "idle", detail: "Retrying", error: undefined })
     await this.ensure(id)
   }
 
-  async setVoice(id: ModelId, voiceId: string): Promise<void> {
+  setVoice(id: ModelId, voiceId: string): Promise<void> {
+    const changeVersion = (this.voiceChangeVersions.get(id) ?? 0) + 1
+    this.voiceChangeVersions.set(id, changeVersion)
+    return this.enqueueConfigurationMutation(id, () => this.changeVoice(id, voiceId, changeVersion))
+  }
+
+  private async changeVoice(id: ModelId, voiceId: string, changeVersion: number): Promise<void> {
     const model = MODEL_BY_ID[id]
     const voice = model.voices.find((candidate) => candidate.id === voiceId)
     if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
+    const isCurrent = () => this.voiceChangeVersions.get(id) === changeVersion
+    if (!isCurrent()) return
     const runtime = this.runtime(id)
     if (runtime.voiceIds && !runtime.voiceIds.includes(voiceId)) {
       throw new Error(`${runtime.name} does not support ${voice.name}`)
     }
-    const changeVersion = (this.voiceChangeVersions.get(id) ?? 0) + 1
-    this.voiceChangeVersions.set(id, changeVersion)
-    const isCurrentChange = () => this.voiceChangeVersions.get(id) === changeVersion
-    if (["generating", "playing"].includes(this.states[id].phase)) {
-      throw new Error(`Wait for the current ${model.name} synthesis to finish before changing voices`)
-    }
+    this.assertConfigurationMutable(id, "voices")
     const obsoleteDownloads = [...this.voiceDownloads.entries()].filter(
       ([key]) => key.startsWith(`${id}:`) && key !== `${id}:${voiceId}`,
     )
     for (const [, download] of obsoleteDownloads) download.controller.abort()
     await Promise.allSettled(obsoleteDownloads.map(([, download]) => download.promise))
-    if (!isCurrentChange()) return
-    this.patch(id, { voiceId, lastLatency: undefined, error: undefined })
+    if (!isCurrent()) return
+    this.assertConfigurationMutable(id, "voices")
+    this.patch(id, { voiceId, lastLatency: undefined, runtimeStats: undefined, error: undefined })
+    if (!isCurrent()) return
+    this.restoreRuntimeStats(id)
+    if (!isCurrent()) return
     try {
       await this.ensure(id)
-      if (!isCurrentChange()) return
+      if (!isCurrent()) return
+      this.assertConfigurationMutable(id, "voices")
       await this.ensureVoice(id, voiceId)
-      if (isCurrentChange() && this.states[id].voiceId === voiceId) {
+      if (!isCurrent()) return
+      this.throwIfDisposed()
+      if (this.states[id].voiceId === voiceId) {
         this.patch(id, { phase: "ready", detail: `Voice ready: ${voice.name}` })
       }
     } catch (error) {
-      if (!isCurrentChange()) return
+      if (!isCurrent()) return
+      if (this.disposed) throw error
       const message = error instanceof Error ? error.message : String(error)
       if (this.states[id].voiceId === voiceId) {
         this.patch(id, { phase: "error", detail: message, error: message })
@@ -310,62 +369,169 @@ export class ModelManager implements DemoController {
     }
   }
 
-  async setRuntime(id: ModelId, runtimeId: string): Promise<void> {
-    const model = MODEL_BY_ID[id]
-    const runtime = model.runtimes.find((candidate) => candidate.id === runtimeId)
-    if (!runtime) throw new Error(`Unknown ${model.name} runtime: ${runtimeId}`)
+  setRuntime(id: ModelId, runtimeId: string): Promise<void> {
     const changeVersion = (this.runtimeChangeVersions.get(id) ?? 0) + 1
     this.runtimeChangeVersions.set(id, changeVersion)
-    const isCurrentChange = () => this.runtimeChangeVersions.get(id) === changeVersion
-    if (this.states[id].runtimeId === runtimeId) {
+    return this.enqueueConfigurationMutation(id, () => this.changeRuntime(id, runtimeId, changeVersion))
+  }
+
+  private async changeRuntime(id: ModelId, runtimeId: string, changeVersion: number): Promise<void> {
+    const isCurrent = () => this.runtimeChangeVersions.get(id) === changeVersion
+    const transition = await this.enqueuePersistedMutation(async () => {
+      const model = MODEL_BY_ID[id]
+      const runtime = model.runtimes.find((candidate) => candidate.id === runtimeId)
+      if (!runtime) throw new Error(`Unknown ${model.name} runtime: ${runtimeId}`)
+      if (!isCurrent()) return "stale" as const
+      this.assertConfigurationMutable(id, "runtime")
+      if (this.states[id].runtimeId === runtimeId) return "unchanged" as const
+      const previousState = {
+        ...this.states[id],
+        synthesisParameters: { ...this.states[id].synthesisParameters },
+      }
+      let stoppedActiveWorker = false
+      try {
+        const activeInstall = this.installs.get(id)
+        if (activeInstall) {
+          activeInstall.controller.abort()
+          await activeInstall.promise.catch(() => undefined)
+          if (!isCurrent()) return "stale" as const
+          this.assertConfigurationMutable(id, "runtime")
+        }
+        const activeVoiceDownloads = [...this.voiceDownloads.entries()].filter(([key]) => key.startsWith(`${id}:`))
+        for (const [, download] of activeVoiceDownloads) download.controller.abort()
+        await Promise.allSettled(activeVoiceDownloads.map(([, download]) => download.promise))
+        if (!isCurrent()) return "stale" as const
+        this.assertConfigurationMutable(id, "runtime")
+        if (this.activeWorker?.id === id) {
+          const active = this.activeWorker
+          await active.worker.stop()
+          stoppedActiveWorker = true
+          if (this.activeWorker === active) {
+            this.activeWorker = undefined
+            this.clearWorkerRss(id)
+          } else if (this.activeWorker?.id !== id) {
+            this.clearWorkerRss(id)
+          }
+          if (!isCurrent()) return "stale" as const
+          this.assertConfigurationMutable(id, "runtime")
+        }
+        const voiceId = runtime.voiceIds?.includes(this.states[id].voiceId)
+          ? this.states[id].voiceId
+          : runtime.voiceIds?.[0] ?? this.states[id].voiceId
+        const synthesisParameters = {
+          ...this.persistedSynthesisParameters[id]![runtimeId]!,
+        }
+        this.patch(id, {
+          runtimeId,
+          voiceId,
+          synthesisParameters,
+          installed: false,
+          resident: false,
+          phase: "idle",
+          detail: `Runtime selected: ${runtime.name}`,
+          lastLatency: undefined,
+          runtimeStats: undefined,
+          error: undefined,
+        })
+        this.restoreRuntimeStats(id)
+        await this.saveSettings()
+      } catch (error) {
+        const previousWorkerRemains = this.activeWorker?.id === id
+          && this.activeWorker.runtimeId === previousState.runtimeId
+        this.patch(id, stoppedActiveWorker || (previousState.resident && !previousWorkerRemains) ? {
+          ...previousState,
+          resident: false,
+          runtimeStats: previousState.runtimeStats
+            ? { ...previousState.runtimeStats, workerRssBytes: undefined }
+            : undefined,
+        } : previousState)
+        throw error
+      }
+      return "changed" as const
+    })
+    if (!isCurrent() || transition === "stale") return
+    if (transition === "unchanged") {
       const interruptedSetup = this.installs.get(id)
       if (interruptedSetup?.controller.signal.aborted) {
         await interruptedSetup.promise.catch(() => undefined)
-        if (isCurrentChange()) await this.ensure(id)
+        if (!isCurrent()) return
+        this.assertConfigurationMutable(id, "runtime")
+        try {
+          await this.ensure(id)
+        } catch (error) {
+          if (!isCurrent()) return
+          throw error
+        }
+        if (!isCurrent()) return
       }
       return
     }
-    if (["generating", "playing"].includes(this.states[id].phase)) {
-      throw new Error(`Wait for the current ${model.name} synthesis to finish before changing runtime`)
+    this.assertConfigurationMutable(id, "runtime")
+    try {
+      await this.ensure(id)
+    } catch (error) {
+      if (!isCurrent()) return
+      throw error
     }
-    const activeInstall = this.installs.get(id)
-    if (activeInstall) {
-      activeInstall.controller.abort()
-      await activeInstall.promise.catch(() => undefined)
-      if (!isCurrentChange()) return
-    }
-    const activeVoiceDownloads = [...this.voiceDownloads.entries()].filter(([key]) => key.startsWith(`${id}:`))
-    for (const [, download] of activeVoiceDownloads) download.controller.abort()
-    await Promise.allSettled(activeVoiceDownloads.map(([, download]) => download.promise))
-    if (!isCurrentChange()) return
-    if (this.activeWorker?.id === id) {
-      const active = this.activeWorker
-      this.activeWorker = undefined
-      await active.worker.stop()
-      if (!isCurrentChange()) return
-    }
-    const voiceId = runtime.voiceIds?.includes(this.states[id].voiceId)
-      ? this.states[id].voiceId
-      : runtime.voiceIds?.[0] ?? this.states[id].voiceId
-    this.patch(id, {
-      runtimeId,
-      voiceId,
-      installed: false,
-      resident: false,
-      phase: "idle",
-      detail: `Runtime selected: ${runtime.name}`,
-      lastLatency: undefined,
-      runtimeStats: undefined,
-      error: undefined,
+    if (!isCurrent()) return
+    if (this.states[id].runtimeId === runtimeId) this.restoreRuntimeStats(id)
+  }
+
+  setSynthesisParameters(
+    id: ModelId,
+    expectedRuntimeId: string,
+    parameters: SynthesisParameters,
+  ): Promise<void> {
+    return this.enqueueConfigurationMutation(
+      id,
+      () => this.changeSynthesisParameters(id, expectedRuntimeId, parameters),
+    )
+  }
+
+  private async changeSynthesisParameters(
+    id: ModelId,
+    expectedRuntimeId: string,
+    parameters: SynthesisParameters,
+  ): Promise<void> {
+    await this.enqueuePersistedMutation(async () => {
+      this.throwIfDisposed()
+      const model = MODEL_BY_ID[id]
+      if (this.states[id].runtimeId !== expectedRuntimeId) {
+        throw new Error(`${model.name} runtime changed before synthesis parameters could be applied`)
+      }
+      if (this.synthesis || ["generating", "playing"].includes(this.states[id].phase)) {
+        throw new Error(`Wait for the current ${model.name} synthesis to finish before changing parameters`)
+      }
+      const normalized = normalizeModelSynthesisParameters(id, parameters, expectedRuntimeId)
+      const previousState = {
+        ...this.states[id],
+        synthesisParameters: { ...this.states[id].synthesisParameters },
+      }
+      const previousPersisted = { ...this.persistedSynthesisParameters[id]![expectedRuntimeId]! }
+      this.persistedSynthesisParameters[id]![expectedRuntimeId] = { ...normalized }
+      this.patch(id, {
+        synthesisParameters: { ...normalized },
+        lastLatency: undefined,
+        runtimeStats: undefined,
+        error: undefined,
+      })
+      this.restoreRuntimeStats(id)
+      try {
+        await this.saveSettings()
+      } catch (error) {
+        this.persistedSynthesisParameters[id]![expectedRuntimeId] = previousPersisted
+        this.patch(id, previousState)
+        throw error
+      }
     })
-    await this.saveRuntimeSettings()
-    if (!isCurrentChange()) return
-    await this.ensure(id)
-    if (isCurrentChange() && this.states[id].runtimeId === runtimeId) this.restoreRuntimeStats(id, runtimeId)
   }
 
   async speak(id: ModelId, text: string): Promise<void> {
+    this.throwIfDisposed()
     if (this.synthesis) throw new Error("Another synthesis is already running")
+    if (this.configurationTails.has(id)) {
+      throw new Error(`Wait for the current ${MODEL_BY_ID[id].name} configuration change to finish before synthesizing`)
+    }
     const operation = this.synthesize(id, text)
     this.synthesis = operation.finally(() => {
       this.synthesis = undefined
@@ -377,12 +543,19 @@ export class ModelManager implements DemoController {
     const cleanText = text.trim()
     if (!cleanText) throw new Error("Enter some text first")
     await this.ensure(id)
-    const voiceId = this.states[id].voiceId
-    await this.ensureVoice(id, voiceId)
+    while (true) {
+      const { runtimeId, voiceId } = this.states[id]
+      await this.ensureVoice(id, voiceId)
+      if (this.states[id].runtimeId === runtimeId && this.states[id].voiceId === voiceId) break
+    }
+    const captured = this.states[id]
+    const runtimeId = captured.runtimeId
+    const voiceId = captured.voiceId
+    const parameters = {
+      ...normalizeModelSynthesisParameters(id, captured.synthesisParameters, runtimeId),
+    }
     const outputDir = join(APP_HOME, "output")
-    await mkdir(outputDir, { recursive: true })
     const output = join(outputDir, `${id}-${randomUUID()}.wav`)
-    const runtimeId = this.states[id].runtimeId
     const warm = this.activeWorker?.id === id && this.activeWorker.runtimeId === runtimeId
 
     this.patch(id, {
@@ -392,9 +565,12 @@ export class ModelManager implements DemoController {
       error: undefined,
     })
     try {
-      const worker = await this.getWorker(id)
-      const result = await worker.worker.generate(cleanText, output, voiceId)
-      this.recordGeneration(id, runtimeId, result.generationMs, worker.worker)
+      await mkdir(outputDir, { recursive: true })
+      const runtime = MODEL_BY_ID[id].runtimes.find((candidate) => candidate.id === runtimeId)
+      if (!runtime) throw new Error(`Unknown ${MODEL_BY_ID[id].name} runtime: ${runtimeId}`)
+      const worker = await this.getWorker(id, runtime)
+      const result = await worker.worker.generate(cleanText, output, voiceId, parameters)
+      this.recordGeneration(id, runtimeId, voiceId, parameters, result.generationMs, worker.worker)
       this.activeAudioModel = id
       this.patch(id, { phase: "playing", detail: "Starting OpenTUI audio", generationProgress: 1 })
       const playbackStarted = performance.now()
@@ -423,7 +599,14 @@ export class ModelManager implements DemoController {
     }
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal
+    this.disposed = true
+    this.disposal = this.disposeInternal()
+    return this.disposal
+  }
+
+  private async disposeInternal(): Promise<void> {
     this.controller.abort()
     if (this.resourceTimer) clearInterval(this.resourceTimer)
     for (const install of this.installs.values()) install.controller.abort()
@@ -434,6 +617,10 @@ export class ModelManager implements DemoController {
       ...[...this.voiceDownloads.values()].map(({ promise }) => promise),
       ...(this.nativeBuild ? [this.nativeBuild.promise] : []),
       ...(this.synthesis ? [this.synthesis] : []),
+      ...this.configurationTails.values(),
+      this.refreshOperation,
+      this.persistedMutationTail,
+      this.settingsWrites,
     ]
     const workers = new Set<RuntimeWorker>()
     if (this.startingWorker) workers.add(this.startingWorker)
@@ -454,9 +641,11 @@ export class ModelManager implements DemoController {
 
   private async refresh(): Promise<void> {
     for (const model of MODELS) {
+      if (this.disposed) return
       const runtime = this.runtime(model.id)
       if (model.id === "kokoro") {
         const result = await this.kokoro.inspect(runtime.id as KokoroRuntimeId)
+        if (this.disposed) return
         if (this.states.kokoro.runtimeId !== runtime.id) continue
         this.patch("kokoro", {
           installed: result.ready,
@@ -468,11 +657,15 @@ export class ModelManager implements DemoController {
         })
       } else if (runtime.kind === "native") {
         const assets = runtime.assets ?? []
-        const installed = Boolean(await this.fluidAudioBuilder.findBinary())
-          && (assets.length === 0 || await this.assetsExist(model.id, assets))
+        const binary = await this.fluidAudioBuilder.findBinary()
+        if (this.disposed) return
+        const installed = Boolean(binary) && (assets.length === 0 || await this.assetsExist(model.id, assets))
+        if (this.disposed) return
         if (installed && this.states[model.id].runtimeId === runtime.id) this.markReady(model.id)
-      } else if (await this.isPythonInstalled(model) && this.states[model.id].runtimeId === runtime.id) {
-        this.markReady(model.id)
+      } else {
+        const installed = await this.isPythonInstalled(model)
+        if (this.disposed) return
+        if (installed && this.states[model.id].runtimeId === runtime.id) this.markReady(model.id)
       }
     }
   }
@@ -482,22 +675,118 @@ export class ModelManager implements DemoController {
     return model.runtimes.find((runtime) => runtime.id === this.states[id].runtimeId) ?? model.runtimes[0]!
   }
 
+  private throwIfDisposed(): void {
+    if (this.disposed) throw new Error("Model manager is disposed")
+  }
+
+  private assertConfigurationMutable(id: ModelId, setting: "runtime" | "voices"): void {
+    this.throwIfDisposed()
+    if (this.synthesis || ["generating", "playing"].includes(this.states[id].phase)) {
+      throw new Error(`Wait for the current ${MODEL_BY_ID[id].name} synthesis to finish before changing ${setting}`)
+    }
+  }
+
+  private enqueueConfigurationMutation(id: ModelId, mutate: () => Promise<void>): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error("Model manager is disposed"))
+    const previous = this.configurationTails.get(id) ?? Promise.resolve()
+    const operation = previous.then(() => {
+      this.throwIfDisposed()
+      return mutate()
+    })
+    let tail!: Promise<void>
+    const result = operation.finally(() => {
+      if (this.configurationTails.get(id) === tail) this.configurationTails.delete(id)
+    })
+    tail = result.catch(() => undefined)
+    this.configurationTails.set(id, tail)
+    return result
+  }
+
+  private enqueuePersistedMutation<T>(mutate: () => Promise<T>): Promise<T> {
+    const operation = this.persistedMutationTail.then(() => {
+      this.throwIfDisposed()
+      return mutate()
+    })
+    this.persistedMutationTail = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
+  private linkController(controller: AbortController): () => void {
+    const signal = this.controller.signal
+    const abort = () => controller.abort(signal.reason)
+    if (signal.aborted) controller.abort(signal.reason)
+    else signal.addEventListener("abort", abort, { once: true })
+    return () => signal.removeEventListener("abort", abort)
+  }
+
   private loadRuntimeSettings(): void {
     try {
-      const settings = JSON.parse(readFileSync(this.settingsPath(), "utf8")) as { runtimes?: Record<string, string> }
+      const parsed: unknown = JSON.parse(readFileSync(this.settingsPath(), "utf8"))
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return
+      const settings = parsed as { version?: unknown; runtimes?: unknown; synthesisParameters?: unknown }
+      const runtimes = settings.runtimes !== null && typeof settings.runtimes === "object" && !Array.isArray(settings.runtimes)
+        ? settings.runtimes as Record<string, unknown>
+        : {}
+      const storedParameters = settings.version === 2
+        && settings.synthesisParameters !== null
+        && typeof settings.synthesisParameters === "object"
+        && !Array.isArray(settings.synthesisParameters)
+        ? settings.synthesisParameters as Record<string, unknown>
+        : {}
       for (const model of MODELS) {
-        const runtimeId = settings.runtimes?.[model.id]
-        if (runtimeId && model.runtimes.some((runtime) => runtime.id === runtimeId)) {
-          this.patch(model.id, { runtimeId })
+        const modelParameters = storedParameters[model.id] !== null
+          && typeof storedParameters[model.id] === "object"
+          && !Array.isArray(storedParameters[model.id])
+          ? storedParameters[model.id] as Record<string, unknown>
+          : {}
+        for (const runtime of model.runtimes) {
+          if (Object.hasOwn(modelParameters, runtime.id)) {
+            this.persistedSynthesisParameters[model.id]![runtime.id] = recoverModelSynthesisParameters(
+              model.id,
+              modelParameters[runtime.id],
+              runtime.id,
+            )
+          }
         }
+        const storedRuntimeId = runtimes[model.id]
+        const runtimeId = typeof storedRuntimeId === "string"
+          && model.runtimes.some((runtime) => runtime.id === storedRuntimeId)
+          ? storedRuntimeId
+          : model.defaultRuntimeId
+        const runtime = model.runtimes.find((candidate) => candidate.id === runtimeId) ?? model.runtimes[0]!
+        const assets = runtime.assets ?? model.assets
+        this.patch(model.id, {
+          runtimeId,
+          synthesisParameters: { ...this.persistedSynthesisParameters[model.id]![runtimeId]! },
+          totalBytes: assets.reduce((sum, asset) => sum + asset.size, 0),
+        })
       }
     } catch {}
   }
 
-  private async saveRuntimeSettings(): Promise<void> {
-    await mkdir(APP_HOME, { recursive: true })
-    const runtimes = Object.fromEntries(MODELS.map((model) => [model.id, this.states[model.id].runtimeId]))
-    await Bun.write(this.settingsPath(), JSON.stringify({ runtimes }, null, 2))
+  private saveSettings(): Promise<void> {
+    this.throwIfDisposed()
+    const path = this.settingsPath()
+    const operation = this.settingsWrites.then(async () => {
+      this.throwIfDisposed()
+      const settings: SettingsV2 = {
+        version: 2,
+        runtimes: Object.fromEntries(MODELS.map((model) => [model.id, this.states[model.id].runtimeId])),
+        synthesisParameters: this.persistedSynthesisParameters,
+      }
+      const contents = JSON.stringify(settings, null, 2)
+      const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+      await mkdir(dirname(path), { recursive: true })
+      try {
+        await writeFile(temporaryPath, contents)
+        await rename(temporaryPath, path)
+      } catch (error) {
+        await rm(temporaryPath, { force: true }).catch(() => undefined)
+        throw error
+      }
+    })
+    this.settingsWrites = operation.catch(() => undefined)
+    return operation
   }
 
   private async ensureNativeRuntime(id: ModelId, runtime: RuntimeProfile, signal: AbortSignal): Promise<void> {
@@ -550,11 +839,10 @@ export class ModelManager implements DemoController {
     }
     if (!binaryReady && !build) {
       const controller = new AbortController()
-      const abort = () => controller.abort()
-      this.controller.signal.addEventListener("abort", abort, { once: true })
+      const unlink = this.linkController(controller)
       const users = new Set<ModelId>([id])
       const promise = this.buildNativeRuntime(id, controller.signal).finally(() => {
-        this.controller.signal.removeEventListener("abort", abort)
+        unlink()
         if (this.nativeBuild?.promise === promise) this.nativeBuild = undefined
       })
       build = { promise, controller, users }
@@ -808,14 +1096,16 @@ export class ModelManager implements DemoController {
 
   private async getWorker(
     id: ModelId,
+    runtime: RuntimeProfile,
   ): Promise<{ id: ModelId; runtimeId: string; worker: RuntimeWorker; loadMs: number }> {
-    const runtime = this.runtime(id)
+    this.throwIfDisposed()
     if (this.activeWorker?.id === id && this.activeWorker.runtimeId === runtime.id) return this.activeWorker
     if (this.activeWorker) {
       const previous = this.activeWorker
       this.activeWorker = undefined
       this.clearWorkerRss(previous.id)
       await previous.worker.stop()
+      this.throwIfDisposed()
     }
 
     if (id === "kokoro") {
@@ -831,6 +1121,10 @@ export class ModelManager implements DemoController {
           }
         },
       })
+      if (this.controller.signal.aborted) {
+        await started.worker.stop()
+        this.throwIfDisposed()
+      }
       instance = started.worker
       this.activeWorker = { id, runtimeId: runtime.id, worker: started.worker, loadMs: started.loadMs }
       this.patch("kokoro", {
@@ -850,7 +1144,9 @@ export class ModelManager implements DemoController {
       if (runtime.nativeBackend !== "pocket") throw new Error(`Native runtime is not configured for ${MODEL_BY_ID[id].name}`)
       const nativeHome = join(APP_HOME, "native-home")
       await mkdir(nativeHome, { recursive: true })
+      this.throwIfDisposed()
       const binaryPath = await this.fluidAudioBuilder.findBinary()
+      this.throwIfDisposed()
       if (!binaryPath) throw new Error("FluidAudio sidecar is not built")
       command = createFluidAudioBackendCommand({
         binaryPath,
@@ -880,6 +1176,7 @@ export class ModelManager implements DemoController {
     let instance: NdjsonRuntimeWorker | undefined
     const worker = await NdjsonRuntimeWorker.spawn({
       command,
+      signal: this.controller.signal,
       env,
       logPath: this.logPath(id),
       onStatus: (event) => this.handleWorkerEvent(id, event),
@@ -938,8 +1235,15 @@ export class ModelManager implements DemoController {
     this.handleWorkerEvent("kokoro", event)
   }
 
-  private recordGeneration(id: ModelId, runtimeId: string, generationMs: number, worker: RuntimeWorker): void {
-    const key = `${id}:${runtimeId}`
+  private recordGeneration(
+    id: ModelId,
+    runtimeId: string,
+    voiceId: string,
+    parameters: SynthesisParameters,
+    generationMs: number,
+    worker: RuntimeWorker,
+  ): void {
+    const key = getSynthesisConfigurationKey(id, runtimeId, voiceId, parameters)
     const history = this.generationHistory.get(key) ?? []
     history.push(generationMs)
     this.generationHistory.set(key, history)
@@ -959,12 +1263,20 @@ export class ModelManager implements DemoController {
   }
 
   private refreshResourceUsage(): void {
+    if (this.disposed) return
     const active = this.activeWorker
     if (!active || this.states[active.id].runtimeId !== active.runtimeId) return
     const appMemory = process.memoryUsage()
     const workerMemory = active.worker.getResourceUsage()
     const current = this.states[active.id].runtimeStats
-    const historySummary = summarizeGenerationTimes(this.generationHistory.get(`${active.id}:${active.runtimeId}`) ?? [])
+    const state = this.states[active.id]
+    const key = getSynthesisConfigurationKey(
+      active.id,
+      active.runtimeId,
+      state.voiceId,
+      state.synthesisParameters,
+    )
+    const historySummary = summarizeGenerationTimes(this.generationHistory.get(key) ?? [])
     this.patch(active.id, {
       runtimeStats: {
         sampleCount: historySummary?.sampleCount ?? current?.sampleCount ?? 0,
@@ -980,8 +1292,15 @@ export class ModelManager implements DemoController {
     })
   }
 
-  private restoreRuntimeStats(id: ModelId, runtimeId: string): void {
-    const summary = summarizeGenerationTimes(this.generationHistory.get(`${id}:${runtimeId}`) ?? [])
+  private restoreRuntimeStats(id: ModelId): void {
+    const state = this.states[id]
+    const key = getSynthesisConfigurationKey(
+      id,
+      state.runtimeId,
+      state.voiceId,
+      state.synthesisParameters,
+    )
+    const summary = summarizeGenerationTimes(this.generationHistory.get(key) ?? [])
     if (!summary) return
     const appMemory = process.memoryUsage()
     this.patch(id, {
@@ -1015,6 +1334,7 @@ export class ModelManager implements DemoController {
   }
 
   private async ensureVoice(id: ModelId, voiceId: string): Promise<void> {
+    this.throwIfDisposed()
     const model = MODEL_BY_ID[id]
     const voice = model.voices.find((candidate) => candidate.id === voiceId)
     if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
@@ -1040,8 +1360,7 @@ export class ModelManager implements DemoController {
       if (this.states[id].voiceId !== voiceId || this.states[id].runtimeId !== runtimeId) return
     }
     const controller = new AbortController()
-    const abort = () => controller.abort()
-    this.controller.signal.addEventListener("abort", abort, { once: true })
+    const unlink = this.linkController(controller)
     const operation = (async () => {
       this.patch(id, {
         phase: "download",
@@ -1073,7 +1392,7 @@ export class ModelManager implements DemoController {
       if (id !== "kokoro") await this.appendLog(id, `[app] Voice ready: ${voice.id}`)
       if (this.states[id].voiceId === voiceId && this.states[id].runtimeId === runtimeId) this.markReady(id)
     })().finally(() => {
-      this.controller.signal.removeEventListener("abort", abort)
+      unlink()
       if (this.voiceDownloads.get(key)?.promise === operation) this.voiceDownloads.delete(key)
     })
     this.voiceDownloads.set(key, { promise: operation, controller })
@@ -1093,7 +1412,10 @@ export class ModelManager implements DemoController {
 
   private patch(id: ModelId, update: Partial<ModelState>): void {
     this.states[id] = { ...this.states[id], ...update }
-    for (const listener of this.listeners) listener({ ...this.states[id] })
+    for (const listener of this.listeners) listener({
+      ...this.states[id],
+      synthesisParameters: { ...this.states[id].synthesisParameters },
+    })
   }
 
   private modelDir(id: ModelId): string {

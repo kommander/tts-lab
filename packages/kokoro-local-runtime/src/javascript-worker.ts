@@ -1,5 +1,12 @@
 import type { ProgressInfo } from "@huggingface/transformers"
-import type { RuntimeResourceUsage, RuntimeWorker, WorkerResult } from "./core/index.js"
+import {
+  normalizeSynthesisParameters,
+  type RuntimeResourceUsage,
+  type RuntimeWorker,
+  type SynthesisParameters,
+  type WorkerResult,
+} from "./core/index.js"
+import { KOKORO_PARAMETER_DEFINITIONS } from "./catalog.js"
 import { KokoroEnglishTTS, type KokoroModel, type KokoroTokenizer } from "./kokoro-adapter.js"
 import type { KokoroEvent, KokoroJavascriptLoadOptions } from "./runtime.js"
 
@@ -138,12 +145,19 @@ export class KokoroJavascriptWorker implements RuntimeWorker {
     private readonly onExit?: () => void,
   ) {}
 
-  async generate(text: string, output: string, voice = "af_heart"): Promise<WorkerResult> {
+  async generate(
+    text: string,
+    output: string,
+    voice = "af_heart",
+    parameters?: SynthesisParameters,
+  ): Promise<WorkerResult> {
     if (this.disposed) throw new Error("Kokoro JavaScript runtime is not running")
+    const normalized = normalizeSynthesisParameters(KOKORO_PARAMETER_DEFINITIONS, parameters)
+    const speed = normalized.speed as number
     const generation = (async () => {
       this.onEvent?.({ type: "status", detail: `Synthesizing with Kokoro ${voice} on ${this.deviceName}` })
       const started = performance.now()
-      const audio = await this.tts.generate(text, { voice })
+      const audio = await this.tts.generate(text, { voice, speed })
       await audio.save(output)
       return { output, generationMs: performance.now() - started }
     })()

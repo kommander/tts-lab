@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import math
 import os
 import subprocess
 import shutil
@@ -13,6 +14,91 @@ import tempfile
 import wave
 from pathlib import Path
 from types import ModuleType
+
+
+_MISSING = object()
+
+PARAMETER_DEFINITIONS = {
+    "kitten": {
+        "speed": ("number", 1.0, 0.5, 2.0, 0.05),
+    },
+    "qwen": {
+        "temperature": ("enum", "stable", ("stable", "expressive")),
+        "seed": ("number", 42, 0, 2147483647, 1),
+    },
+    "piper": {
+        "speed": ("enum", "normal", ("slow", "normal", "fast")),
+    },
+    "melo": {
+        "speed": ("number", 1.0, 0.1, 10.0, 0.1),
+    },
+    "parler": {
+        "rate": ("enum", "moderate", ("slow", "moderate", "fast")),
+        "pitch": ("enum", "natural", ("low", "natural", "high")),
+        "expression": ("enum", "slight", ("neutral", "slight", "expressive")),
+    },
+    "f5": {
+        "speed": ("number", 1.0, 0.3, 2.0, 0.1),
+        "nfeSteps": ("number", 32, 4, 64, 2),
+        "seed": ("number", 42, 0, 2147483647, 1),
+        "crossFade": ("number", 0.15, 0.0, 1.0, 0.01),
+        "removeSilence": ("boolean", False),
+    },
+}
+
+
+def parse_synthesis_parameters(model: str, value: object = _MISSING) -> dict[str, object]:
+    definitions = PARAMETER_DEFINITIONS[model]
+    if value is _MISSING:
+        supplied = {}
+    elif type(value) is not dict:
+        raise ValueError("Synthesis parameters must be an object")
+    else:
+        supplied = value
+
+    unknown = sorted(set(supplied) - set(definitions))
+    if unknown:
+        raise ValueError(f"Unknown synthesis parameter: {unknown[0]}")
+
+    normalized = {}
+    for name, definition in definitions.items():
+        kind, default, *constraints = definition
+        parameter = supplied.get(name, default)
+        if kind == "number":
+            minimum, maximum, step = constraints
+            if isinstance(parameter, bool) or not isinstance(parameter, (int, float)) or not math.isfinite(parameter):
+                raise ValueError(f"{name} must be a finite number")
+            if parameter < minimum or parameter > maximum:
+                raise ValueError(f"{name} must be between {minimum:g} and {maximum:g}")
+            steps = (parameter - minimum) / step
+            if not math.isclose(steps, round(steps), rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(f"{name} must use increments of {step:g}")
+        elif kind == "boolean":
+            if type(parameter) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        elif type(parameter) is not str or parameter not in constraints[0]:
+            raise ValueError(f"{name} must be one of: {', '.join(constraints[0])}")
+        normalized[name] = parameter
+    return normalized
+
+
+def parse_request_parameters(model: str, request: dict[str, object]) -> dict[str, object]:
+    if "parameters" not in request:
+        return parse_synthesis_parameters(model)
+    return parse_synthesis_parameters(model, request["parameters"])
+
+
+def build_parler_description(voice_id: str, parameters: dict[str, object]) -> str:
+    expression = {
+        "neutral": "neutral",
+        "slight": "slightly expressive",
+        "expressive": "expressive",
+    }[parameters["expression"]]
+    return (
+        f"{voice_id}'s voice is clear and {expression}, with a {parameters['rate']} speaking rate "
+        f"and {parameters['pitch']} pitch. The recording is of very high quality with very clear audio; "
+        "the voice sounds close, with almost no reverberation or background noise."
+    )
 
 
 def emit(event_type: str, **payload: object) -> None:
@@ -185,10 +271,20 @@ def load_kitten(assets: Path):
     emit("status", detail="Loading KittenTTS Nano INT8 on CPU")
     model = create_kitten_model(assets)
 
-    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+    def synthesize(
+        text: str,
+        output: Path,
+        request_id: str | None = None,
+        voice_id: str | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> None:
+        parameters = parse_synthesis_parameters("kitten", parameters if parameters is not None else _MISSING)
         voice_id = voice_id or "Jasper"
         emit_request(request_id, "status", detail=f"Synthesizing with KittenTTS {voice_id} on CPU")
-        audio = np.asarray(model.generate(text, voice=voice_id, speed=1.0, clean_text=True), dtype=np.float32).squeeze()
+        audio = np.asarray(
+            model.generate(text, voice=voice_id, speed=parameters["speed"], clean_text=True),
+            dtype=np.float32,
+        ).squeeze()
         if audio.ndim != 1 or audio.size == 0 or not np.isfinite(audio).all():
             raise RuntimeError("KittenTTS produced invalid audio")
         sf.write(output, audio, 24000, subtype="PCM_16")
@@ -219,7 +315,14 @@ def load_qwen(assets: Path):
     emit("status", detail="Loading Qwen3-TTS 0.6B CustomVoice 4-bit on MLX")
     model = create_qwen_model(assets)
 
-    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+    def synthesize(
+        text: str,
+        output: Path,
+        request_id: str | None = None,
+        voice_id: str | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> None:
+        parameters = parse_synthesis_parameters("qwen", parameters if parameters is not None else _MISSING)
         voice_id = (voice_id or "ryan").lower()
         if voice_id not in QWEN_SPEAKERS:
             raise ValueError(f"Unknown Qwen3-TTS speaker: {voice_id}")
@@ -230,13 +333,14 @@ def load_qwen(assets: Path):
                 f"the deterministic profile allows at most {QWEN_MAX_TEXT_TOKENS}"
             )
         emit_request(request_id, "status", detail=f"Synthesizing with Qwen3-TTS {voice_id} on MLX")
-        mx.random.seed(42)
+        temperature = {"stable": 0.7, "expressive": 0.9}[parameters["temperature"]]
+        mx.random.seed(int(parameters["seed"]))
         results = list(model.generate_custom_voice(
             text=text,
             speaker=voice_id,
             language="English",
             instruct=None,
-            temperature=0.7,
+            temperature=temperature,
             max_tokens=QWEN_MAX_AUDIO_TOKENS,
             top_k=50,
             top_p=1.0,
@@ -265,20 +369,29 @@ def load_qwen(assets: Path):
 
 
 def load_piper(assets: Path):
-    from piper import PiperVoice
+    from piper import PiperVoice, SynthesisConfig
 
     emit("status", detail="Loading Piper ONNX voice on CPU")
     voices = {"en_US-lessac-medium": PiperVoice.load(str(assets / "en_US-lessac-medium.onnx"))}
 
-    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+    def synthesize(
+        text: str,
+        output: Path,
+        request_id: str | None = None,
+        voice_id: str | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> None:
+        parameters = parse_synthesis_parameters("piper", parameters if parameters is not None else _MISSING)
         voice_id = voice_id or "en_US-lessac-medium"
         if voice_id not in voices:
             model_path = assets / "voices" / voice_id / f"{voice_id}.onnx"
             voices[voice_id] = PiperVoice.load(str(model_path))
         voice = voices[voice_id]
+        speed_factor = {"slow": 0.5, "normal": 1.0, "fast": 2.0}[parameters["speed"]]
+        synthesis_config = SynthesisConfig(length_scale=voice.config.length_scale / speed_factor)
         emit_request(request_id, "status", detail=f"Synthesizing with Piper {voice_id}")
         with wave.open(str(output), "wb") as wav_file:
-            voice.synthesize_wav(text, wav_file)
+            voice.synthesize_wav(text, wav_file, syn_config=synthesis_config)
 
     return synthesize
 
@@ -303,7 +416,14 @@ def load_melo(assets: Path):
     bert_device = "mps" if sys.platform == "darwin" and torch.backends.mps.is_available() else "cpu"
     english_bert.model = AutoModelForMaskedLM.from_pretrained("bert-base-uncased").to(bert_device)
 
-    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+    def synthesize(
+        text: str,
+        output: Path,
+        request_id: str | None = None,
+        voice_id: str | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> None:
+        parameters = parse_synthesis_parameters("melo", parameters if parameters is not None else _MISSING)
         class Progress:
             def __call__(self, items):
                 items = list(items)
@@ -322,6 +442,7 @@ def load_melo(assets: Path):
             str(output),
             pbar=Progress(),
             quiet=True,
+            speed=parameters["speed"],
         )
 
     return synthesize
@@ -366,13 +487,16 @@ def load_parler(assets: Path):
     description_tokenizer = AutoTokenizer.from_pretrained(
         str(assets / "description-tokenizer"), local_files_only=True
     )
-    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+    def synthesize(
+        text: str,
+        output: Path,
+        request_id: str | None = None,
+        voice_id: str | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> None:
+        parameters = parse_synthesis_parameters("parler", parameters if parameters is not None else _MISSING)
         voice_id = voice_id or "Jon"
-        description = (
-            f"{voice_id}'s voice is clear and slightly expressive, with a moderate speaking rate and natural pitch. "
-            "The recording is of very high quality with very clear audio; the voice sounds close, "
-            "with almost no reverberation or background noise."
-        )
+        description = build_parler_description(voice_id, parameters)
         description_inputs = description_tokenizer(description, return_tensors="pt").to(device)
         prompt_inputs = prompt_tokenizer(text, return_tensors="pt").to(device)
         emit_request(
@@ -404,7 +528,14 @@ def load_f5(assets: Path):
     )
     reference = files("f5_tts").joinpath("infer/examples/basic/basic_ref_en.wav")
 
-    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+    def synthesize(
+        text: str,
+        output: Path,
+        request_id: str | None = None,
+        voice_id: str | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> None:
+        parameters = parse_synthesis_parameters("f5", parameters if parameters is not None else _MISSING)
         class Progress:
             def tqdm(self, items):
                 items = list(items)
@@ -421,7 +552,11 @@ def load_f5(assets: Path):
             file_wave=str(output),
             show_info=lambda message: emit_request(request_id, "status", detail=str(message)),
             progress=Progress(),
-            seed=42,
+            speed=parameters["speed"],
+            nfe_step=int(parameters["nfeSteps"]),
+            seed=int(parameters["seed"]),
+            cross_fade_duration=parameters["crossFade"],
+            remove_silence=parameters["removeSilence"],
         )
 
     return synthesize
@@ -457,11 +592,12 @@ def serve(model_name: str, assets: Path) -> None:
             text = str(request["text"]).strip()
             output = Path(request["output"])
             voice_id = request.get("voice")
+            parameters = parse_request_parameters(model_name, request)
             if not text:
                 raise ValueError("No text was provided")
             output.parent.mkdir(parents=True, exist_ok=True)
             started = time.perf_counter()
-            synthesize(text, output, request_id, voice_id)
+            synthesize(text, output, request_id, voice_id, parameters)
             generation_ms = round((time.perf_counter() - started) * 1000, 1)
             emit_request(request_id, "progress", progress=1.0)
             emit_request(

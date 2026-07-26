@@ -1,19 +1,37 @@
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type {
+  BoxRenderable,
   InputRenderable,
   KeyEvent,
   Renderable,
   ScrollBoxRenderable,
   SelectRenderable,
   TabSelectRenderable,
+  TextRenderable,
   TextareaRenderable,
 } from "@opentui/core"
 import type { Keymap } from "@opentui/keymap"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js"
+import {
+  getDefaultSynthesisParameters,
+  normalizeSynthesisParameters,
+  type SynthesisParameterDefinition,
+  type SynthesisParameterValue,
+} from "kokoro-local-runtime/core"
+import type * as SolidTypes from "solid-js"
+// Node resolves Solid's server build; OpenTUI requires the reactive universal runtime.
+// @ts-expect-error Solid does not publish declarations for this explicit runtime path.
+import * as SolidRuntime from "solid-js/dist/solid.js"
+import {
+  adjustSynthesisParameter,
+  describeSynthesisParameter,
+  formatSynthesisParameterValue,
+} from "./lib/synthesis-parameters.js"
 import { MODEL_BY_ID, MODELS } from "./models.js"
 import type { DemoController, ModelId, ModelState } from "./types.js"
+
+const { createEffect, createMemo, createSignal, For, onCleanup, onMount } = SolidRuntime as typeof SolidTypes
 
 const COLORS = {
   background: "#18201B",
@@ -107,6 +125,19 @@ function Spectrum(props: { levels: number[]; rowCount: number }) {
 
 export const SPEAK_BINDING = "ctrl+g"
 
+type FocusTarget = "models" | "voices" | "editor" | "runtime"
+
+interface ParameterDraft {
+  modelId: ModelId
+  runtimeId: string
+  definitions: readonly SynthesisParameterDefinition[]
+  parameters: Record<string, SynthesisParameterValue>
+  selectedIndex: number
+  previousFocus: FocusTarget
+  error: string
+  applying: boolean
+}
+
 export function App(props: { controller: DemoController; keymap: Keymap<Renderable, KeyEvent> }) {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
@@ -114,12 +145,13 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const initial = props.controller.snapshot()
   const [states, setStates] = createSignal(initial)
   const [selected, setSelected] = createSignal<ModelId>("kokoro")
-  const [focus, setFocus] = createSignal<"models" | "voices" | "editor" | "runtime">("models")
+  const [focus, setFocus] = createSignal<FocusTarget>("models")
   const [text, setText] = createSignal("Local speech should be simple, private, and a little bit delightful.")
   const [spectrum, setSpectrum] = createSignal(props.controller.getSpectrum())
   const [tick, setTick] = createSignal(0)
   let editor: TextareaRenderable | undefined
   let tabs: TabSelectRenderable | undefined
+  let voiceSelect: SelectRenderable | undefined
   let runtimeScroll: ScrollBoxRenderable | undefined
 
   const state = createMemo(() => states()[selected()])
@@ -171,8 +203,8 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   })
   const keyHints = createMemo(() =>
     veryNarrow()
-      ? `${speakKeyLabel} speak  F2 save  F3 runtime`
-      : `TAB focus  ${speakKeyLabel} speak  F2 save  F3 runtime  CTRL+R retry  ESC quit`,
+      ? `${speakKeyLabel} speak  F2 save  F3 runtime  F4 tune`
+      : `TAB focus  ${speakKeyLabel} speak  F2 save  F3 runtime  F4 tune  CTRL+R retry  ESC quit`,
   )
   const dialogWidth = createMemo(() => Math.max(24, Math.min(76, dimensions().width - 4)))
   const [saveDialogOpen, setSaveDialogOpen] = createSignal(false)
@@ -180,8 +212,27 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   const [saveError, setSaveError] = createSignal("")
   const [saving, setSaving] = createSignal(false)
   const [runtimeDialogOpen, setRuntimeDialogOpen] = createSignal(false)
+  const [parameterDraft, setParameterDraft] = createSignal<ParameterDraft | null>(null)
   let saveInput: InputRenderable | undefined
   let runtimeSelect: SelectRenderable | undefined
+  let parameterDialog: BoxRenderable | undefined
+  let parameterScroll: ScrollBoxRenderable | undefined
+  let parameterHelpSecondary: TextRenderable | undefined
+  let parameterEmpty: TextRenderable | undefined
+  let parameterDescription: TextRenderable | undefined
+  let parameterStatus: TextRenderable | undefined
+  const parameterRows: BoxRenderable[] = []
+  const parameterIndicators: TextRenderable[] = []
+  const parameterLabels: TextRenderable[] = []
+  const parameterValues: TextRenderable[] = []
+  const parameterRowSlots = Array.from({
+    length: Math.max(...MODELS.flatMap((model) => model.runtimes.map((runtime) => runtime.parameters.length))),
+  }, (_, index) => index)
+  const parameterDialogWidth = createMemo(() => Math.max(24, Math.min(64, dimensions().width - 4)))
+  const parameterDialogHeight = createMemo(() => {
+    const contentHeight = (parameterDraft()?.definitions.length ?? 0) + (veryNarrow() ? 7 : 6)
+    return Math.max(8, Math.min(contentHeight, dimensions().height - 2))
+  })
   const options = createMemo(() =>
     MODELS.map((model) => ({
       name: `${states()[model.id].installed ? "+" : states()[model.id].phase === "error" ? "!" : " "} ${model.name}`,
@@ -203,7 +254,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   }
 
   const moveFocus = (direction: 1 | -1) => {
-    const targets: Array<"models" | "voices" | "editor" | "runtime"> =
+    const targets: FocusTarget[] =
       availableVoices().length > 1 ? ["models", "voices", "editor", "runtime"] : ["models", "editor", "runtime"]
     const current = Math.max(0, targets.indexOf(focus()))
     setFocus(targets[(current + direction + targets.length) % targets.length]!)
@@ -233,6 +284,170 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
     setRuntimeDialogOpen(true)
     queueMicrotask(() => runtimeSelect?.focus())
   }
+
+  const focusTarget = (target: FocusTarget) => {
+    setFocus(target)
+    queueMicrotask(() => {
+      if (target === "models") tabs?.focus()
+      else if (target === "voices") voiceSelect?.focus()
+      else if (target === "editor") editor?.focus()
+      else runtimeScroll?.focus()
+    })
+  }
+
+  const blurDialogsAndFocus = () => {
+    saveInput?.blur()
+    runtimeSelect?.blur()
+    tabs?.blur()
+    voiceSelect?.blur()
+    editor?.blur()
+    runtimeScroll?.blur()
+  }
+
+  const openParameterDialog = () => {
+    const modelId = selected()
+    const current = states()[modelId]
+    const runtime = MODEL_BY_ID[modelId].runtimes.find((candidate) => candidate.id === current.runtimeId)
+    if (!runtime) return
+    const definitions = [...runtime.parameters]
+    const parameters = normalizeSynthesisParameters(definitions, current.synthesisParameters)
+    const previousFocus = focus()
+    setSaveDialogOpen(false)
+    setSaveError("")
+    setSaving(false)
+    setRuntimeDialogOpen(false)
+    blurDialogsAndFocus()
+    setParameterDraft({
+      modelId,
+      runtimeId: current.runtimeId,
+      definitions,
+      parameters: { ...parameters },
+      selectedIndex: 0,
+      previousFocus,
+      error: "",
+      applying: false,
+    })
+    queueMicrotask(() => parameterScroll?.scrollTo(0))
+  }
+
+  const dismissParameterDialog = () => {
+    const draft = parameterDraft()
+    const previousFocus = draft?.previousFocus
+    setParameterDraft(null)
+    if (previousFocus) focusTarget(previousFocus)
+  }
+
+  const closeParameterDialog = () => {
+    if (parameterDraft()?.applying) return
+    dismissParameterDialog()
+  }
+
+  const moveParameterSelection = (direction: -1 | 1) => {
+    let nextIndex: number | undefined
+    setParameterDraft((draft) => {
+      if (!draft || draft.definitions.length === 0 || draft.applying) return draft
+      const selectedIndex = (draft.selectedIndex + direction + draft.definitions.length) % draft.definitions.length
+      nextIndex = selectedIndex
+      return { ...draft, selectedIndex, error: "" }
+    })
+    if (nextIndex !== undefined) queueMicrotask(() => parameterScroll?.scrollTo(nextIndex!))
+  }
+
+  const adjustSelectedParameter = (direction: -1 | 1) => {
+    setParameterDraft((draft) => {
+      const definition = draft?.definitions[draft.selectedIndex]
+      if (!draft || !definition || draft.applying) return draft
+      const value = draft.parameters[definition.id] ?? definition.default
+      return {
+        ...draft,
+        parameters: {
+          ...draft.parameters,
+          [definition.id]: adjustSynthesisParameter(definition, value, direction),
+        },
+        error: "",
+      }
+    })
+  }
+
+  const resetParameterDraft = () => {
+    setParameterDraft((draft) => draft && !draft.applying
+      ? { ...draft, parameters: { ...getDefaultSynthesisParameters(draft.definitions) }, error: "" }
+      : draft)
+  }
+
+  const applyParameterDraft = async () => {
+    const draft = parameterDraft()
+    if (!draft || draft.applying) return
+    let parameters: Record<string, SynthesisParameterValue>
+    try {
+      parameters = { ...normalizeSynthesisParameters(draft.definitions, draft.parameters) }
+    } catch (error) {
+      setParameterDraft((current) => current === draft
+        ? { ...current, error: error instanceof Error ? error.message : String(error) }
+        : current)
+      return
+    }
+    const applyingDraft = { ...draft, parameters, applying: true, error: "" }
+    setParameterDraft(applyingDraft)
+    try {
+      await props.controller.setSynthesisParameters(draft.modelId, draft.runtimeId, parameters)
+      if (parameterDraft() === applyingDraft) dismissParameterDialog()
+    } catch (error) {
+      setParameterDraft((current) => current === applyingDraft
+        ? { ...current, applying: false, error: error instanceof Error ? error.message : String(error) }
+        : current)
+    }
+  }
+
+  createEffect(() => {
+    const draft = parameterDraft()
+    if (!parameterDialog) return
+    parameterDialog.visible = draft !== null
+    if (!draft) return
+
+    const hasError = draft.error.length > 0
+    parameterDialog.width = parameterDialogWidth()
+    parameterDialog.height = parameterDialogHeight()
+    parameterDialog.marginLeft = -Math.floor(parameterDialogWidth() / 2)
+    parameterDialog.marginTop = -Math.floor(parameterDialogHeight() / 2)
+    parameterDialog.title = ` ${MODEL_BY_ID[draft.modelId].name.toUpperCase()} TUNING `
+    parameterDialog.borderColor = hasError ? COLORS.red : COLORS.cyan
+    parameterDialog.titleColor = hasError ? COLORS.red : COLORS.cyan
+    if (parameterHelpSecondary) parameterHelpSecondary.visible = veryNarrow()
+    if (parameterEmpty) parameterEmpty.visible = draft.definitions.length === 0
+
+    for (const [index, row] of parameterRows.entries()) {
+      const definition = draft.definitions[index]
+      row.visible = definition !== undefined
+      if (!definition) continue
+      const isSelected = index === draft.selectedIndex
+      const value = draft.parameters[definition.id] ?? definition.default
+      if (parameterIndicators[index]) {
+        parameterIndicators[index]!.content = isSelected ? ">" : " "
+        parameterIndicators[index]!.fg = isSelected ? COLORS.cyan : COLORS.muted
+      }
+      if (parameterLabels[index]) {
+        parameterLabels[index]!.content = definition.label
+        parameterLabels[index]!.fg = isSelected ? COLORS.ink : COLORS.muted
+      }
+      if (parameterValues[index]) {
+        parameterValues[index]!.content = formatSynthesisParameterValue(definition, value)
+        parameterValues[index]!.fg = isSelected ? COLORS.cyan : COLORS.ink
+      }
+    }
+
+    if (parameterDescription) {
+      const definition = draft.definitions[draft.selectedIndex]
+      parameterDescription.content = definition ? describeSynthesisParameter(definition) : "Defaults are already active"
+    }
+    if (parameterStatus) {
+      parameterStatus.content = draft.error || (draft.applying ? "Applying..." : "Changes apply only when Enter is pressed")
+      parameterStatus.fg = hasError ? COLORS.red : COLORS.muted
+    }
+    const selectedRow = parameterRows[draft.selectedIndex]
+    if (selectedRow) parameterScroll?.scrollChildIntoView(selectedRow.id)
+    parameterDialog.requestRender()
+  })
 
   const closeSaveDialog = () => {
     setSaveDialogOpen(false)
@@ -266,7 +481,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
   }
 
   const disposeBindings = props.keymap.registerLayer({
-    enabled: () => !saveDialogOpen() && !runtimeDialogOpen(),
+    enabled: () => !saveDialogOpen() && !runtimeDialogOpen() && !parameterDraft(),
     commands: [
       {
         name: "app.quit",
@@ -317,6 +532,13 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           openRuntimeDialog()
         },
       },
+      {
+        name: "parameters.edit.open",
+        desc: "Tune synthesis parameters",
+        run() {
+          openParameterDialog()
+        },
+      },
     ],
     bindings: [
       { key: "escape", cmd: "app.quit" },
@@ -326,6 +548,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
       { key: SPEAK_BINDING, cmd: "tts.speak" },
       { key: { name: "f2" }, cmd: "audio.save.open" },
       { key: { name: "f3" }, cmd: "runtime.select.open" },
+      { key: { name: "f4" }, cmd: "parameters.edit.open" },
       { key: "ctrl+r", cmd: "model.retry" },
     ],
   })
@@ -365,7 +588,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
     bindings: [{ key: "escape", cmd: "runtime.select.close" }],
   })
   const disposeRuntimeScrollBindings = props.keymap.registerLayer({
-    enabled: () => focus() === "runtime" && !saveDialogOpen() && !runtimeDialogOpen(),
+    enabled: () => focus() === "runtime" && !saveDialogOpen() && !runtimeDialogOpen() && !parameterDraft(),
     priority: 50,
     commands: [
       { name: "runtime.scroll.up", run: () => runtimeScroll?.scrollBy(-1, "step") },
@@ -384,11 +607,34 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
       { key: "end", cmd: "runtime.scroll.end" },
     ],
   })
+  const disposeParameterBindings = props.keymap.registerLayer({
+    enabled: () => parameterDraft() !== null,
+    priority: 100,
+    commands: [
+      { name: "parameters.edit.close", run: closeParameterDialog },
+      { name: "parameters.edit.previous", run: () => moveParameterSelection(-1) },
+      { name: "parameters.edit.next", run: () => moveParameterSelection(1) },
+      { name: "parameters.edit.decrement", run: () => adjustSelectedParameter(-1) },
+      { name: "parameters.edit.increment", run: () => adjustSelectedParameter(1) },
+      { name: "parameters.edit.reset", run: resetParameterDraft },
+      { name: "parameters.edit.apply", run: applyParameterDraft },
+    ],
+    bindings: [
+      { key: "escape", cmd: "parameters.edit.close" },
+      { key: "up", cmd: "parameters.edit.previous" },
+      { key: "down", cmd: "parameters.edit.next" },
+      { key: "left", cmd: "parameters.edit.decrement" },
+      { key: "right", cmd: "parameters.edit.increment" },
+      { key: "r", cmd: "parameters.edit.reset" },
+      { key: "return", cmd: "parameters.edit.apply" },
+    ],
+  })
   onCleanup(() => {
     disposeBindings()
     disposeSaveBindings()
     disposeRuntimeBindings()
     disposeRuntimeScrollBindings()
+    disposeParameterBindings()
   })
 
   onMount(() => {
@@ -477,6 +723,7 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
             titleAlignment="left"
           >
             <select
+              ref={(value) => (voiceSelect = value)}
               focused={focus() === "voices" && availableVoices().length > 1}
               options={voiceOptions()}
               selectedIndex={voiceIndex()}
@@ -776,6 +1023,75 @@ export function App(props: { controller: DemoController; keymap: Keymap<Renderab
           wrapSelection
           onSelect={(_, option) => option?.value && chooseRuntime(option.value as string)}
         />
+      </box>
+
+      <box
+        ref={(value) => (parameterDialog = value)}
+        position="absolute"
+        left="50%"
+        top="50%"
+        width={parameterDialogWidth()}
+        height={parameterDialogHeight()}
+        marginLeft={-Math.floor(parameterDialogWidth() / 2)}
+        marginTop={-Math.floor(parameterDialogHeight() / 2)}
+        zIndex={100}
+        visible={false}
+        flexDirection="column"
+        border
+        borderStyle="single"
+        borderColor={COLORS.cyan}
+        title=" SYNTHESIS TUNING "
+        titleColor={COLORS.cyan}
+        titleAlignment="center"
+        paddingX={1}
+        backgroundColor={COLORS.background}
+        overflow="hidden"
+      >
+        <text fg={COLORS.muted} flexShrink={0} truncate>
+          {veryNarrow() ? "↑↓ field · ←→ value" : "↑↓ field · ←→ value · R defaults · Enter apply · Esc cancel"}
+        </text>
+        <text
+          ref={(value) => (parameterHelpSecondary = value)}
+          visible={veryNarrow()}
+          fg={COLORS.muted}
+          flexShrink={0}
+          truncate
+        >
+          R defaults · Enter apply · Esc cancel
+        </text>
+        <scrollbox
+          ref={(value) => (parameterScroll = value)}
+          flexGrow={1}
+          scrollY
+          scrollX={false}
+          viewportCulling
+          backgroundColor="transparent"
+          contentOptions={{ flexDirection: "column" }}
+          verticalScrollbarOptions={{ visible: false }}
+          horizontalScrollbarOptions={{ visible: false }}
+        >
+          <For each={parameterRowSlots}>
+            {(index) => (
+              <box
+                ref={(value) => (parameterRows[index] = value)}
+                visible={false}
+                height={1}
+                flexShrink={0}
+                flexDirection="row"
+                columnGap={1}
+              >
+                <text ref={(value) => (parameterIndicators[index] = value)} fg={COLORS.muted} flexShrink={0}> </text>
+                <text ref={(value) => (parameterLabels[index] = value)} fg={COLORS.muted} flexGrow={1} truncate />
+                <text ref={(value) => (parameterValues[index] = value)} fg={COLORS.ink} flexShrink={0} />
+              </box>
+            )}
+          </For>
+          <text ref={(value) => (parameterEmpty = value)} visible={false} fg={COLORS.muted} flexShrink={0}>
+            No synthesis parameters for this runtime
+          </text>
+        </scrollbox>
+        <text ref={(value) => (parameterDescription = value)} fg={COLORS.muted} flexShrink={0} truncate />
+        <text ref={(value) => (parameterStatus = value)} fg={COLORS.muted} flexShrink={0} truncate />
       </box>
 
     </box>

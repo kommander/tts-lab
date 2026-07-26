@@ -10,15 +10,19 @@ import {
 } from "./fluidaudio/index.js"
 import {
   NdjsonRuntimeWorker,
+  SynthesisParameterError,
   bootstrapUv,
   downloadAssets,
+  normalizeSynthesisParameters,
   runProcess,
   type RuntimeWorker,
+  type SynthesisParameters,
   type WorkerResult,
   type WorkerStatusEvent,
 } from "./core/index.js"
 import {
   KOKORO_ASSETS,
+  KOKORO_PARAMETER_DEFINITIONS,
   KOKORO_DEFAULT_VOICE_ID,
   KOKORO_RUNTIMES,
   KOKORO_SETUP_VERSION,
@@ -96,8 +100,12 @@ export interface KokoroPrepareResult extends KokoroInspection {}
 
 export interface KokoroStartedRuntime {
   runtimeId: KokoroRuntimeId
-  worker: RuntimeWorker
+  worker: KokoroWorker
   loadMs: number
+}
+
+export interface KokoroWorker extends RuntimeWorker {
+  generate(text: string, output: string, voice?: KokoroVoiceId, parameters?: SynthesisParameters): Promise<WorkerResult>
 }
 
 export interface KokoroSynthesizeOptions extends KokoroStartOptions {
@@ -105,6 +113,7 @@ export interface KokoroSynthesizeOptions extends KokoroStartOptions {
   text: string
   output: string
   voice?: KokoroVoiceId
+  parameters?: SynthesisParameters
 }
 
 export interface KokoroSynthesisResult extends WorkerResult {
@@ -113,7 +122,13 @@ export interface KokoroSynthesisResult extends WorkerResult {
   loadMs: number
 }
 
-export type KokoroErrorCode = "INVALID_RUNTIME" | "INVALID_VOICE" | "UNSUPPORTED" | "NOT_PREPARED" | "SETUP_FAILED"
+export type KokoroErrorCode =
+  | "INVALID_RUNTIME"
+  | "INVALID_VOICE"
+  | "INVALID_PARAMETER"
+  | "UNSUPPORTED"
+  | "NOT_PREPARED"
+  | "SETUP_FAILED"
 
 export class KokoroRuntimeError extends Error {
   override readonly name = "KokoroRuntimeError"
@@ -132,6 +147,18 @@ function runtimeById(runtimeId: string): KokoroRuntimeDescriptor {
   const runtime = KOKORO_RUNTIMES.find((candidate) => candidate.id === runtimeId)
   if (!runtime) throw new KokoroRuntimeError("INVALID_RUNTIME", `Unknown Kokoro runtime: ${runtimeId}`)
   return runtime
+}
+
+export function normalizeKokoroSynthesisParameters(
+  parameters?: SynthesisParameters,
+  runtimeId?: KokoroRuntimeId,
+): SynthesisParameters {
+  try {
+    return normalizeSynthesisParameters(KOKORO_PARAMETER_DEFINITIONS, parameters)
+  } catch (error) {
+    if (!(error instanceof SynthesisParameterError)) throw error
+    throw new KokoroRuntimeError("INVALID_PARAMETER", error.message, runtimeId, { cause: error })
+  }
 }
 
 function envPython(envDir: string): string {
@@ -237,14 +264,19 @@ async function joinSharedOperation<T>(
   }
 }
 
-class KokoroRuntimeWorker implements RuntimeWorker {
+class KokoroRuntimeWorker implements KokoroWorker {
   constructor(
     private readonly worker: RuntimeWorker,
     private readonly runtimeId: KokoroRuntimeId,
     private readonly voices: readonly KokoroVoiceId[],
   ) {}
 
-  generate(text: string, output: string, voice = KOKORO_DEFAULT_VOICE_ID): Promise<WorkerResult> {
+  generate(
+    text: string,
+    output: string,
+    voice: KokoroVoiceId = KOKORO_DEFAULT_VOICE_ID,
+    parameters?: SynthesisParameters,
+  ): Promise<WorkerResult> {
     if (!this.voices.includes(voice as KokoroVoiceId)) {
       throw new KokoroRuntimeError(
         "INVALID_VOICE",
@@ -252,7 +284,7 @@ class KokoroRuntimeWorker implements RuntimeWorker {
         this.runtimeId,
       )
     }
-    return this.worker.generate(text, output, voice)
+    return this.worker.generate(text, output, voice, normalizeKokoroSynthesisParameters(parameters, this.runtimeId))
   }
 
   dispose(): void {
@@ -268,14 +300,19 @@ class KokoroRuntimeWorker implements RuntimeWorker {
   }
 }
 
-class TopLevelKokoroWorker implements RuntimeWorker {
+class TopLevelKokoroWorker implements KokoroWorker {
   constructor(
     private readonly worker: RuntimeWorker,
     private readonly runtime: KokoroRuntime,
   ) {}
 
-  generate(text: string, output: string, voice?: string): Promise<WorkerResult> {
-    return this.worker.generate(text, output, voice)
+  generate(
+    text: string,
+    output: string,
+    voice?: KokoroVoiceId,
+    parameters?: SynthesisParameters,
+  ): Promise<WorkerResult> {
+    return this.worker.generate(text, output, voice, parameters)
   }
 
   dispose(): void {
@@ -573,6 +610,7 @@ export class KokoroRuntime {
 
   private async performSynthesis(options: KokoroSynthesizeOptions): Promise<KokoroSynthesisResult> {
     const voice = options.voice ?? KOKORO_DEFAULT_VOICE_ID
+    const parameters = normalizeKokoroSynthesisParameters(options.parameters, options.runtimeId)
     const capability = this.capability(options.runtimeId)
     if (!capability.voices.includes(voice)) {
       throw new KokoroRuntimeError("INVALID_VOICE", `${runtimeById(options.runtimeId).name} does not support ${voice}`, options.runtimeId)
@@ -582,7 +620,7 @@ export class KokoroRuntime {
     const started = await this.start(options.runtimeId, options)
     try {
       options.signal?.throwIfAborted()
-      const generation = started.worker.generate(options.text, options.output, voice)
+      const generation = started.worker.generate(options.text, options.output, voice, parameters)
       const result = options.signal
         ? await new Promise<WorkerResult>((resolvePromise, rejectPromise) => {
             const abort = () => {

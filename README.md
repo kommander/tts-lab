@@ -67,8 +67,24 @@ This repository is a Bun monorepo with one lockfile and two packages:
 | `Ctrl+G` | Generate and play speech |
 | `F2` | Save the latest WAV |
 | `F3` | Choose the selected model runtime |
+| `F4` | Tune synthesis parameters for the selected runtime |
 | `Ctrl+R` | Retry failed setup |
 | `Escape` | Exit or close the save dialog |
+
+## Synthesis Tuning
+
+Press `F4` to open the selected runtime's tuning form. Use `Up`/`Down` to select a field, `Left`/`Right` to change it, `R` to reset the draft, `Enter` to apply, and `Escape` to discard. Applied values affect the next request without reloading a resident model and persist per model/runtime in `.tts-lab/settings.json`.
+
+| Model | Exposed controls |
+|---|---|
+| Kokoro | Speed `0.5–2.0` on every runtime |
+| KittenTTS | Speed `0.5–2.0` |
+| Pocket TTS | Tested temperature preset; de-essing toggle |
+| Qwen3-TTS | Tested temperature preset; deterministic seed |
+| Piper | Tested slow/normal/fast presets mapped to each voice's native length scale |
+| MeloTTS | Speed `0.1–10.0` |
+| Parler-TTS | Speaking rate, pitch, and expression prompt choices |
+| F5-TTS | Speed, NFE steps, seed, crossfade, and silence removal |
 
 ## Models
 
@@ -109,7 +125,7 @@ JavaScript profiles run in-process through a package-internal, Apache-2.0 Kokoro
 
 [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) uses MLX-Audio 0.4.6 and the immutable 0.6B CustomVoice 4-bit conversion. Seven verified model files total 1.58 GiB. The initial profile exposes nine preset speakers in English with deterministic fixed-seed sampling, at most 42 input text tokens, and a 256-codec-token output ceiling. Output that reaches the ceiling without EOS is rejected rather than silently truncated. Voice cloning, multilingual generation, voice design, style instructions, and unseeded generation are intentionally not exposed. Although resident RSS is about 1.9 GB on the tested M5 Max, transient MLX allocation reached about 5.7 GB, so setup requires macOS 14+ on Apple Silicon with at least 16 GB memory.
 
-Runtime statistics are session-local and separate per profile. JavaScript ONNX memory is included in app RSS; Python and CoreML workers report available current and peak RSS. These are process-level values, not model-tensor estimates.
+Runtime statistics are session-local and separate per runtime, voice, and normalized tuning configuration. JavaScript ONNX memory is included in app RSS; Python and CoreML workers report available current and peak RSS. These are process-level values, not model-tensor estimates.
 
 Model, dataset, and voice licenses remain separate from this repository's license. Review them before commercial use or voice replication.
 

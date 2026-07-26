@@ -3,6 +3,7 @@ node_modules/
 skills-lock.json
 .tts-lab/
 dist/
+.build/
 coverage/
 .env
 .env.*

@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 import type { Readable } from "node:stream"
 import { finished } from "node:stream/promises"
+import type { SynthesisParameters } from "./parameters.js"
 import { processTreeSpawnOptions, terminateProcessTree } from "./process.js"
 
 const TIMEOUT_MS = 15 * 60_000
@@ -29,7 +30,7 @@ export interface RuntimeResourceUsage {
 }
 
 export interface RuntimeWorker {
-  generate(text: string, output: string, voice?: string): Promise<WorkerResult>
+  generate(text: string, output: string, voice?: string, parameters?: SynthesisParameters): Promise<WorkerResult>
   dispose(): void
   stop(): Promise<void>
   getResourceUsage(): RuntimeResourceUsage
@@ -37,6 +38,7 @@ export interface RuntimeWorker {
 
 export interface NdjsonRuntimeWorkerOptions {
   command: string[]
+  signal?: AbortSignal
   env?: Record<string, string | undefined>
   logPath: string
   onStatus(event: WorkerStatusEvent): void
@@ -93,11 +95,13 @@ export class NdjsonRuntimeWorker implements RuntimeWorker {
   private readonly startupTimer: ReturnType<typeof setTimeout>
   private disposed = false
   private exitHandled = false
+  private abortListener?: () => void
   private termination?: Promise<void>
   private stopping?: Promise<void>
 
   static async spawn(options: NdjsonRuntimeWorkerOptions): Promise<NdjsonRuntimeWorker> {
     await mkdir(dirname(options.logPath), { recursive: true })
+    options.signal?.throwIfAborted()
     return new NdjsonRuntimeWorker(options)
   }
 
@@ -150,13 +154,25 @@ export class NdjsonRuntimeWorker implements RuntimeWorker {
       try {
         this.handleExit(code, cause)
       } finally {
+        if (this.abortListener) options.signal?.removeEventListener("abort", this.abortListener)
+        this.abortListener = undefined
         log.end()
         await finished(log).catch(() => undefined)
       }
     })()
+    if (options.signal) {
+      this.abortListener = () => this.dispose()
+      if (options.signal.aborted) this.dispose()
+      else options.signal.addEventListener("abort", this.abortListener, { once: true })
+    }
   }
 
-  async generate(text: string, output: string, voice?: string): Promise<WorkerResult> {
+  async generate(
+    text: string,
+    output: string,
+    voice?: string,
+    parameters?: SynthesisParameters,
+  ): Promise<WorkerResult> {
     await this.ready
     if (this.disposed) throw new Error("TTS worker is not running")
     const id = randomUUID()
@@ -170,7 +186,7 @@ export class NdjsonRuntimeWorker implements RuntimeWorker {
     }, TIMEOUT_MS)
     timer.unref?.()
     this.pending.set(id, { ...result, timer })
-    const payload = `${JSON.stringify({ id, text, output, voice })}\n`
+    const payload = `${JSON.stringify({ id, text, output, voice, parameters })}\n`
     try {
       await new Promise<void>((resolve, reject) => {
         this.process.stdin.write(payload, (error) => error ? reject(error) : resolve())

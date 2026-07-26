@@ -14,6 +14,10 @@ let package = Package(
         .executableTarget(
             name: "TtsLabFluidAudio",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]
+        ),
+        .testTarget(
+            name: "TtsLabFluidAudioTests",
+            dependencies: ["TtsLabFluidAudio"]
         )
     ]
 )

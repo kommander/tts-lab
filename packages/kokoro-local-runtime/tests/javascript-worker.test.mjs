@@ -83,3 +83,24 @@ test("defers model disposal and exit until generation and save finish", async ()
   assert.equal(modelDisposed, true)
   assert.equal(exited, true)
 })
+
+test("validates and forwards speed to KokoroEnglishTTS", async () => {
+  const calls = []
+  const tts = {
+    model: {},
+    generate: async (text, options) => {
+      calls.push({ text, options })
+      return { save: async (output) => calls.push({ output }) }
+    },
+  }
+  const worker = new KokoroJavascriptWorker(tts, "CPU")
+  await worker.generate("hello", "output.wav", "af_heart", { speed: 1.3 })
+  assert.deepEqual(calls, [
+    { text: "hello", options: { voice: "af_heart", speed: 1.3 } },
+    { output: "output.wav" },
+  ])
+  await assert.rejects(() => worker.generate("bad", "bad.wav", "af_heart", { speed: "1.3" }), /finite number/)
+  await assert.rejects(() => worker.generate("bad", "bad.wav", "af_heart", { speed: 2.1 }), /between/)
+  await assert.rejects(() => worker.generate("bad", "bad.wav", "af_heart", { pitch: 1 }), /Unknown/)
+  await worker.stop()
+})

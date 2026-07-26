@@ -2,7 +2,9 @@ import { afterEach, expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { render } from "@opentui/solid"
+import type { SynthesisParameters } from "kokoro-local-runtime/core"
 import { App, buildSpectrumRows, getLatencyItems, SPEAK_BINDING } from "./App.js"
+import { getDefaultModelSynthesisParameters } from "./lib/synthesis-parameters.js"
 import { MODEL_BY_ID, MODELS } from "./models.js"
 import type { DemoController, ModelId, ModelState } from "./types.js"
 
@@ -14,6 +16,7 @@ function state(id: ModelId): ModelState {
     id,
     voiceId: MODEL_BY_ID[id].defaultVoiceId,
     runtimeId: MODEL_BY_ID[id].defaultRuntimeId,
+    synthesisParameters: getDefaultModelSynthesisParameters(id),
     installed: id === "kokoro",
     phase: id === "kokoro" ? "ready" : "idle",
     detail: id === "kokoro" ? "Ready" : "Not installed",
@@ -30,6 +33,9 @@ class FakeController implements DemoController {
   speakCount = 0
   voiceSelections: Array<{ model: ModelId; voiceId: string }> = []
   runtimeSelections: Array<{ model: ModelId; runtimeId: string }> = []
+  parameterApplications: Array<{ model: ModelId; expectedRuntimeId: string; parameters: SynthesisParameters }> = []
+  parameterApplicationError?: Error
+  parameterApplicationGate?: Promise<void>
   savedPaths: string[] = []
   snapshot = () =>
     this.initial ?? (Object.fromEntries(MODELS.map(({ id }) => [id, state(id)])) as Record<ModelId, ModelState>)
@@ -51,6 +57,15 @@ class FakeController implements DemoController {
   setRuntime = async (model: ModelId, runtimeId: string) => {
     this.runtimeSelections.push({ model, runtimeId })
   }
+  setSynthesisParameters = async (
+    model: ModelId,
+    expectedRuntimeId: string,
+    parameters: SynthesisParameters,
+  ) => {
+    this.parameterApplications.push({ model, expectedRuntimeId, parameters: { ...parameters } })
+    if (this.parameterApplicationGate) await this.parameterApplicationGate
+    if (this.parameterApplicationError) throw this.parameterApplicationError
+  }
   speak = async () => {
     this.speakCount += 1
   }
@@ -70,6 +85,15 @@ async function renderApp(controller: DemoController, width = 120, height = 32) {
   appKeymap = keymap
   await render(() => <App controller={controller} keymap={keymap} />, renderer.renderer)
   return renderer
+}
+
+async function selectModel(index: number) {
+  for (let current = 0; current < index; current += 1) {
+    renderer?.mockInput.pressArrow("right")
+    await renderer?.flush()
+  }
+  renderer?.mockInput.pressEnter()
+  await renderer?.flush()
 }
 
 test("renders every model and the editor", async () => {
@@ -215,6 +239,161 @@ test("registers an F3 runtime selector command", async () => {
   expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).toContain("f3")
   const result = await appKeymap?.runCommand("runtime.select.open")
   expect(result?.ok).toBe(true)
+})
+
+test("registers F4 and renders active synthesis parameters in a modal", async () => {
+  renderer = await renderApp(new FakeController())
+  expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).toContain("f4")
+  expect((await appKeymap?.runCommand("parameters.edit.open"))?.ok).toBe(true)
+  expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).toContain("up")
+  await renderer.flush()
+  await renderer.renderOnce()
+  const frame = renderer.captureCharFrame()
+  expect(frame).toContain("KOKORO TUNING")
+  expect(frame).toContain("> Speed")
+  expect(frame).toContain("1.0")
+  expect(frame).toContain("Speech speed multiplier")
+  expect(frame).toContain("Enter apply")
+})
+
+test("steps right and applies the captured model and runtime parameters", async () => {
+  const controller = new FakeController()
+  renderer = await renderApp(controller)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await appKeymap?.runCommand("parameters.edit.increment")
+  await appKeymap?.runCommand("parameters.edit.apply")
+  await Bun.sleep(0)
+
+  expect(controller.parameterApplications).toEqual([{
+    model: "kokoro",
+    expectedRuntimeId: "python-pytorch-fp32",
+    parameters: { speed: 1.1 },
+  }])
+  await renderer.renderOnce()
+  expect(renderer.captureCharFrame()).not.toContain("KOKORO TUNING")
+})
+
+test("discards parameter changes on cancel", async () => {
+  const controller = new FakeController()
+  renderer = await renderApp(controller)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await appKeymap?.runCommand("parameters.edit.increment")
+  await appKeymap?.runCommand("parameters.edit.close")
+  expect(controller.parameterApplications).toHaveLength(0)
+})
+
+test("resets only the draft until Enter applies defaults", async () => {
+  const states = Object.fromEntries(MODELS.map(({ id }) => [id, state(id)])) as Record<ModelId, ModelState>
+  states.kokoro.synthesisParameters = { speed: 1.4 }
+  const controller = new FakeController(states)
+  renderer = await renderApp(controller)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await appKeymap?.runCommand("parameters.edit.reset")
+  expect(controller.parameterApplications).toHaveLength(0)
+  await renderer.flush()
+  await renderer.renderOnce()
+  expect(renderer.captureCharFrame()).toContain("1.0")
+
+  await appKeymap?.runCommand("parameters.edit.apply")
+  await Bun.sleep(0)
+  expect(controller.parameterApplications[0]?.parameters).toEqual({ speed: 1 })
+})
+
+test("wraps parameter selection up and down without applying", async () => {
+  const controller = new FakeController()
+  renderer = await renderApp(controller)
+  await selectModel(2)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await appKeymap?.runCommand("parameters.edit.previous")
+  await renderer.flush()
+  await renderer.renderOnce()
+  expect(renderer.captureCharFrame()).toContain("> De-ess")
+  await appKeymap?.runCommand("parameters.edit.next")
+  await renderer.flush()
+  await renderer.renderOnce()
+  expect(renderer.captureCharFrame()).toContain("> Temperature")
+  expect(controller.parameterApplications).toHaveLength(0)
+})
+
+test("keeps the tuning dialog open and displays stale apply errors", async () => {
+  const controller = new FakeController()
+  controller.parameterApplicationError = new Error("Kokoro runtime changed before synthesis parameters could be applied")
+  renderer = await renderApp(controller)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await appKeymap?.runCommand("parameters.edit.apply")
+  await Bun.sleep(0)
+  await renderer.flush()
+  await renderer.renderOnce()
+  const frame = renderer.captureCharFrame()
+  expect(frame).toContain("KOKORO TUNING")
+  expect(frame).toContain("runtime changed before synthesis parameters could be")
+})
+
+test("ignores Escape while parameter changes are applying", async () => {
+  const controller = new FakeController()
+  let release!: () => void
+  controller.parameterApplicationGate = new Promise<void>((resolve) => { release = resolve })
+  renderer = await renderApp(controller)
+  await appKeymap?.runCommand("parameters.edit.open")
+  const applying = appKeymap?.runCommand("parameters.edit.apply")
+  await Bun.sleep(0)
+  await appKeymap?.runCommand("parameters.edit.close")
+  await renderer.flush()
+  await renderer.renderOnce()
+  expect(renderer.captureCharFrame()).toContain("Applying...")
+
+  release()
+  await applying
+  await Bun.sleep(0)
+  await renderer.flush()
+  await renderer.renderOnce()
+  expect(renderer.captureCharFrame()).not.toContain("KOKORO TUNING")
+})
+
+test("isolates base commands while tuning and restores previous focus", async () => {
+  const controller = new FakeController()
+  renderer = await renderApp(controller)
+  await appKeymap?.runCommand("parameters.edit.open")
+  expect((await appKeymap?.dispatchCommand("app.focus-next"))?.ok).toBe(false)
+  expect((await appKeymap?.dispatchCommand("tts.speak"))?.ok).toBe(false)
+  expect(appKeymap?.getActiveKeys().map((key) => key.stroke.name)).not.toContain("f2")
+  await appKeymap?.runCommand("parameters.edit.close")
+  await renderer.flush()
+  renderer.mockInput.pressArrow("right")
+  await renderer.flush()
+  await appKeymap?.runCommand("parameters.edit.open")
+  await renderer.renderOnce()
+  expect(renderer.captureCharFrame()).toContain("KITTENTTS TUNING")
+  expect(controller.speakCount).toBe(0)
+})
+
+test("renders all five F5 tuning fields in a narrow terminal", async () => {
+  renderer = await renderApp(new FakeController(), 52, 18)
+  await selectModel(7)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await renderer.flush()
+  await renderer.renderOnce()
+  const frame = renderer.captureCharFrame()
+  expect(frame).toContain("F5-TTS TUNING")
+  for (const label of ["Speed", "NFE steps", "Seed", "Cross-fade", "Remove silence"]) {
+    expect(frame).toContain(label)
+  }
+  expect(frame).toContain("R defaults · Enter apply · Esc cancel")
+})
+
+test("scrolls all F5 fields into view while keeping tuning help and status visible", async () => {
+  renderer = await renderApp(new FakeController(), 52, 12)
+  await selectModel(7)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await renderer.flush()
+  await renderer.renderOnce()
+  for (let index = 0; index < 4; index += 1) await appKeymap?.runCommand("parameters.edit.next")
+  await renderer.flush()
+  await renderer.renderOnce()
+  const frame = renderer.captureCharFrame()
+  expect(frame).toContain("> Remove silence")
+  expect(frame).toContain("R defaults · Enter apply · Esc cancel")
+  expect(frame).toContain("Changes apply only when Enter is pressed")
 })
 
 test("renders technical runtime statistics", async () => {

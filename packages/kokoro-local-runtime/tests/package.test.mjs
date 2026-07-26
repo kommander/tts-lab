@@ -13,6 +13,15 @@ test("declares the mixed package license accurately", async () => {
   assert.equal(metadata.license, "MIT AND Apache-2.0")
 })
 
+test("exports parameter support through runtime-selected package entry points", async () => {
+  const [root, core] = await Promise.all([
+    import("kokoro-local-runtime"),
+    import("kokoro-local-runtime/core"),
+  ])
+  assert.deepEqual(root.normalizeKokoroSynthesisParameters({ speed: 1.2 }), { speed: 1.2 })
+  assert.deepEqual(core.normalizeSynthesisParameters(root.KOKORO_PARAMETER_DEFINITIONS), { speed: 1 })
+})
+
 test("the runtime tarball is self-contained and excludes generated caches", async () => {
   const { stdout } = await exec("npm", ["pack", "--dry-run", "--json", "--silent"], {
     cwd: `${workspace}/packages/kokoro-local-runtime`,
@@ -30,15 +39,19 @@ test("the runtime tarball is self-contained and excludes generated caches", asyn
     "dist/index.d.ts",
     "dist/core/index.js",
     "dist/core/index.d.ts",
+    "dist/core/parameters.js",
+    "dist/core/parameters.d.ts",
     "dist/fluidaudio/index.js",
     "dist/fluidaudio/index.d.ts",
     "src/index.ts",
     "src/core/index.ts",
+    "src/core/parameters.ts",
     "src/fluidaudio/index.ts",
     "resources/kokoro_worker.py",
     "swift/Package.swift",
     "swift/Package.resolved",
     "swift/Sources/TtsLabFluidAudio/main.swift",
+    "swift/Tests/TtsLabFluidAudioTests/ParameterDecodingTests.swift",
   ]) {
     assert.equal(paths.includes(required), true, `kokoro-local-runtime is missing ${required}`)
   }
