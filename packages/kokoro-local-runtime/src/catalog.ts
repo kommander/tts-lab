@@ -1,4 +1,4 @@
-import type { Asset } from "tts-runtime-core"
+import type { Asset } from "./core/index.js"
 
 export const KOKORO_REVISION = "f3ff3571791e39611d31c381e3a41a3af07b4987" as const
 export const KOKORO_SETUP_VERSION = "kokoro-0.9.4-v2" as const

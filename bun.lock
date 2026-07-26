@@ -10,25 +10,12 @@
         "typescript": "^5.9.2",
       },
     },
-    "packages/fluidaudio-runtime": {
-      "name": "fluidaudio-runtime",
-      "version": "0.1.0",
-      "dependencies": {
-        "tts-runtime-core": "0.1.0",
-      },
-      "devDependencies": {
-        "@types/node": "^24.0.0",
-        "typescript": "^5.9.2",
-      },
-    },
     "packages/kokoro-local-runtime": {
       "name": "kokoro-local-runtime",
       "version": "0.1.0",
       "dependencies": {
         "@huggingface/transformers": "4.2.0",
-        "fluidaudio-runtime": "^0.1.0",
         "phonemizer": "1.2.1",
-        "tts-runtime-core": "^0.1.0",
       },
       "devDependencies": {
         "@types/node": "^24.0.0",
@@ -43,18 +30,8 @@
         "@opentui/keymap": "0.4.5",
         "@opentui/solid": "0.4.5",
         "fft.js": "4.0.4",
-        "fluidaudio-runtime": "0.1.0",
         "kokoro-local-runtime": "0.1.0",
         "solid-js": "1.9.12",
-        "tts-runtime-core": "0.1.0",
-      },
-    },
-    "packages/tts-runtime-core": {
-      "name": "tts-runtime-core",
-      "version": "0.1.0",
-      "devDependencies": {
-        "@types/node": "^24.0.0",
-        "typescript": "^5.9.2",
       },
     },
   },
@@ -298,8 +275,6 @@
 
     "flatbuffers": ["flatbuffers@25.9.23", "", {}, "sha512-MI1qs7Lo4Syw0EOzUl0xjs2lsoeqFku44KpngfIduHBYvzm8h2+7K8YMQh1JtVVVrUvhLpNwqVi4DERegUJhPQ=="],
 
-    "fluidaudio-runtime": ["fluidaudio-runtime@workspace:packages/fluidaudio-runtime"],
-
     "fs.realpath": ["fs.realpath@1.0.0", "", {}, "sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw=="],
 
     "function-bind": ["function-bind@1.1.2", "", {}, "sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA=="],
@@ -419,8 +394,6 @@
     "supports-preserve-symlinks-flag": ["supports-preserve-symlinks-flag@1.0.0", "", {}, "sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w=="],
 
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
-
-    "tts-runtime-core": ["tts-runtime-core@workspace:packages/tts-runtime-core"],
 
     "type-fest": ["type-fest@0.13.1", "", {}, "sha512-34R7HTnG0XIJcBSn5XhDd7nNFPRcXYRZrBB2O2jdKqYODldSzBAqzsWoZYYvduky73toYS/ESqxPvkDf/F0XMg=="],
 

@@ -2,8 +2,8 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { supportsFluidAudio } from "fluidaudio-runtime"
-import { runProcess } from "tts-runtime-core"
+import { runProcess } from "kokoro-local-runtime/core"
+import { supportsFluidAudio } from "kokoro-local-runtime/fluidaudio"
 import {
   copyAudioExport,
   normalizeAudioExportPath,

@@ -3,7 +3,7 @@ import { afterEach, test } from "node:test"
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { bootstrapUv, commandExists, runProcess } from "../dist/index.js"
+import { bootstrapUv, commandExists, runProcess } from "../../dist/core/index.js"
 
 let directory = ""
 

@@ -1,4 +1,4 @@
-import type { Asset } from "tts-runtime-core"
+import type { Asset } from "kokoro-local-runtime/core"
 import { KOKORO_MODEL } from "kokoro-local-runtime"
 import type { ModelId } from "./types.js"
 

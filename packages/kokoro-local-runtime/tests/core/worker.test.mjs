@@ -3,7 +3,7 @@ import { afterEach, test } from "node:test"
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { NdjsonRuntimeWorker } from "../dist/index.js"
+import { NdjsonRuntimeWorker } from "../../dist/core/index.js"
 
 let directory = ""
 

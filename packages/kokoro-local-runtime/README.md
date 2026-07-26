@@ -1,6 +1,6 @@
 # kokoro-local-runtime
 
-Internal, headless Node/Bun Kokoro runtime with Python, ONNX CPU, WebGPU, and CoreML backends.
+Internal, reusable Node/Bun package containing the headless Kokoro runtime and its isolated support modules. It includes Python, ONNX CPU, WebGPU, and CoreML backends in one self-contained tarball.
 
 ## API
 
@@ -21,6 +21,15 @@ await kokoro.dispose()
 
 `homeDir` is required. The package never reads `TTS_LAB_HOME`, plays audio, or downloads/builds during import. `prepare()` is the explicit setup boundary and accepts an `AbortSignal`.
 
+Two deliberate subpaths expose facilities needed by other local TTS engines:
+
+```js
+import { downloadAssets, NdjsonRuntimeWorker } from "kokoro-local-runtime/core"
+import { FluidAudioBuilder } from "kokoro-local-runtime/fluidaudio"
+```
+
+`core` contains resumable downloads, process-tree cancellation, shared uv bootstrap, and the concurrent NDJSON worker. `fluidaudio` contains the shared lazy builder and backend command helpers. Kokoro and Pocket use the same `FluidAudioBuilder`, pinned Swift package, cache path `<homeDir>/tools/fluidaudio-0.15.5-v2`, and `tts-lab-fluidaudio` product.
+
 ## Profiles
 
 - `python-pytorch-fp32`
@@ -38,6 +47,8 @@ and `phonemizer` 1.2.1. Their non-streaming English adapter is derived from
 kokoro-js 1.2.1 commit `664c76a704021239ba59c84dcbaa4d3dece01fe9` and
 loads the 28 bundled voice tensors module-relatively in Node or Bun. Browser
 support is not provided by this package.
+
+Published contents include built JavaScript and declarations for all three exports, the Python worker, 28 voices, the complete pinned Swift package including `Package.resolved`, and all license and notice files. Generated binaries, model data, and build caches are not included.
 
 The package's SPDX license expression is `MIT AND Apache-2.0`: original package
 code is MIT-licensed, while the adapted files and bundled Kokoro voice assets

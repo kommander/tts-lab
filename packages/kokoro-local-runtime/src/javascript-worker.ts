@@ -1,5 +1,5 @@
 import type { ProgressInfo } from "@huggingface/transformers"
-import type { RuntimeResourceUsage, RuntimeWorker, WorkerResult } from "tts-runtime-core"
+import type { RuntimeResourceUsage, RuntimeWorker, WorkerResult } from "./core/index.js"
 import { KokoroEnglishTTS, type KokoroModel, type KokoroTokenizer } from "./kokoro-adapter.js"
 import type { KokoroEvent, KokoroJavascriptLoadOptions } from "./runtime.js"
 

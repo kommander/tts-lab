@@ -7,7 +7,7 @@ import {
   createFluidAudioBackendCommand,
   createFluidAudioEnvironment,
   getFluidAudioCapability,
-} from "fluidaudio-runtime"
+} from "./fluidaudio/index.js"
 import {
   NdjsonRuntimeWorker,
   bootstrapUv,
@@ -16,7 +16,7 @@ import {
   type RuntimeWorker,
   type WorkerResult,
   type WorkerStatusEvent,
-} from "tts-runtime-core"
+} from "./core/index.js"
 import {
   KOKORO_ASSETS,
   KOKORO_DEFAULT_VOICE_ID,

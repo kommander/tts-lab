@@ -11,7 +11,7 @@ import {
   createFluidAudioEnvironment,
   getFluidAudioCapability,
   supportsFluidAudio,
-} from "../dist/index.js"
+} from "../../dist/fluidaudio/index.js"
 
 let directory = ""
 
@@ -40,12 +40,12 @@ test("constructs backend commands and isolated environment", () => {
 })
 
 test("resolves Swift resources module-relatively", async () => {
-  const swiftPackage = fileURLToPath(new URL("../swift", import.meta.url))
+  const swiftPackage = fileURLToPath(new URL("../../swift", import.meta.url))
   assert.equal((await stat(join(swiftPackage, "Package.resolved"))).isFile(), true)
 })
 
 test("reuses an executable from the existing target-triple cache layout", async () => {
-  directory = await mkdtemp(join(tmpdir(), "fluidaudio-runtime-"))
+  directory = await mkdtemp(join(tmpdir(), "fluidaudio-builder-"))
   const binary = join(
     directory,
     "tools",

@@ -46,16 +46,14 @@ Installing every model can require more than 15 GB because each model has an iso
 
 ## Workspace
 
-This repository is a Bun monorepo with one lockfile:
+This repository is a Bun monorepo with one lockfile and two packages:
 
 | Package | Purpose |
 |---|---|
 | `packages/tts-lab` | Private OpenTUI application |
-| `packages/kokoro-local-runtime` | Reusable Node/Bun Kokoro package with all five runtime profiles |
-| `packages/fluidaudio-runtime` | Shared lazy Swift sidecar builder used by Kokoro and Pocket TTS |
-| `packages/tts-runtime-core` | Portable downloads, subprocesses, uv bootstrap, and NDJSON workers |
+| `packages/kokoro-local-runtime` | Reusable, self-contained Node/Bun package with all five Kokoro profiles and shared runtime facilities |
 
-`kokoro-local-runtime` is intentionally private while its API and packaging are exercised inside the workspace. It performs no setup at import or package-install time.
+`kokoro-local-runtime` is intentionally private while its API and packaging are exercised inside the workspace. Its root export is the Kokoro API; deliberate `kokoro-local-runtime/core` and `kokoro-local-runtime/fluidaudio` boundaries expose generic process/download/worker facilities and the shared FluidAudio builder. Kokoro imports those modules internally by relative path, while TTS Lab uses the public subpaths. The package performs no setup at import or package-install time.
 
 ## Controls
 

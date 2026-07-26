@@ -44,4 +44,4 @@ export type {
   KokoroSynthesisResult,
   KokoroSynthesizeOptions,
 } from "./runtime.js"
-export type { RuntimeResourceUsage, RuntimeWorker, WorkerResult, WorkerStatusEvent } from "tts-runtime-core"
+export type { RuntimeResourceUsage, RuntimeWorker, WorkerResult, WorkerStatusEvent } from "./core/index.js"

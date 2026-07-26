@@ -3,13 +3,13 @@ import { access, readdir, stat } from "node:fs/promises"
 import { release } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { commandExists, runProcess } from "tts-runtime-core"
+import { commandExists, runProcess } from "../core/index.js"
 
 export const FLUIDAUDIO_VERSION = "0.15.5"
 export const FLUIDAUDIO_BUILD_VERSION = `${FLUIDAUDIO_VERSION}-v2`
 export const FLUIDAUDIO_PRODUCT = "tts-lab-fluidaudio"
 
-const SWIFT_PACKAGE_PATH = fileURLToPath(new URL("../swift", import.meta.url))
+const SWIFT_PACKAGE_PATH = fileURLToPath(new URL("../../swift", import.meta.url))
 
 export type FluidAudioBackend = "kokoro" | "pocket"
 

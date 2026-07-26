@@ -13,26 +13,33 @@ test("declares the mixed package license accurately", async () => {
   assert.equal(metadata.license, "MIT AND Apache-2.0")
 })
 
-test("runtime package tarballs contain only their explicit payloads", async () => {
-  const expected = {
-    "tts-runtime-core": [],
-    "fluidaudio-runtime": ["swift/Package.swift"],
-    "kokoro-local-runtime": ["resources/kokoro_worker.py", "LICENSE-APACHE-2.0", "THIRD_PARTY_NOTICES"],
+test("the runtime tarball is self-contained and excludes generated caches", async () => {
+  const { stdout } = await exec("npm", ["pack", "--dry-run", "--json", "--silent"], {
+    cwd: `${workspace}/packages/kokoro-local-runtime`,
+    maxBuffer: 4 * 1024 * 1024,
+  })
+  const [{ files }] = JSON.parse(stdout)
+  const paths = files.map(({ path }) => path)
+  for (const required of [
+    "package.json",
+    "LICENSE",
+    "LICENSE-APACHE-2.0",
+    "THIRD_PARTY_NOTICES",
+    "README.md",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/core/index.js",
+    "dist/core/index.d.ts",
+    "dist/fluidaudio/index.js",
+    "dist/fluidaudio/index.d.ts",
+    "resources/kokoro_worker.py",
+    "swift/Package.swift",
+    "swift/Package.resolved",
+    "swift/Sources/TtsLabFluidAudio/main.swift",
+  ]) {
+    assert.equal(paths.includes(required), true, `kokoro-local-runtime is missing ${required}`)
   }
-  for (const [name, extra] of Object.entries(expected)) {
-    const { stdout } = await exec("npm", ["pack", "--dry-run", "--json", "--silent"], {
-      cwd: `${workspace}/packages/${name}`,
-      maxBuffer: 1024 * 1024,
-    })
-    const [{ files }] = JSON.parse(stdout)
-    const paths = files.map(({ path }) => path)
-    for (const required of ["package.json", "LICENSE", "README.md", "dist/index.js", "dist/index.d.ts", ...extra]) {
-      assert.equal(paths.includes(required), true, `${name} is missing ${required}`)
-    }
-    assert.equal(paths.some((path) => path.includes("__pycache__") || path.endsWith(".pyc")), false)
-    if (name === "kokoro-local-runtime") {
-      assert.deepEqual(paths.filter((path) => path.startsWith("resources/")), ["resources/kokoro_worker.py"])
-      assert.equal(paths.filter((path) => path.startsWith("voices/") && path.endsWith(".bin")).length, 28)
-    }
-  }
+  assert.deepEqual(paths.filter((path) => path.startsWith("resources/")), ["resources/kokoro_worker.py"])
+  assert.equal(paths.filter((path) => path.startsWith("voices/") && path.endsWith(".bin")).length, 28)
+  assert.equal(paths.some((path) => /(^|\/)(__pycache__|\.build|\.swiftpm|node_modules)(\/|$)|\.pyc$/.test(path)), false)
 })

@@ -16,9 +16,7 @@
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",
     "fft.js": "4.0.4",
-    "fluidaudio-runtime": "0.1.0",
     "kokoro-local-runtime": "0.1.0",
-    "solid-js": "1.9.12",
-    "tts-runtime-core": "0.1.0"
+    "solid-js": "1.9.12"
   }
 }

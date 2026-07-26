@@ -8,7 +8,7 @@ import {
   createFluidAudioBackendCommand,
   createFluidAudioEnvironment,
   supportsFluidAudio,
-} from "fluidaudio-runtime"
+} from "kokoro-local-runtime/fluidaudio"
 import {
   createKokoro,
   type KokoroEvent,
@@ -23,7 +23,7 @@ import {
   runProcess,
   type RuntimeWorker,
   type WorkerStatusEvent,
-} from "tts-runtime-core"
+} from "kokoro-local-runtime/core"
 import { AudioPlayer } from "./audio-player.js"
 import { MODEL_BY_ID, MODELS, type ModelDefinition, type RuntimeProfile } from "../models.js"
 import type { DemoController, LatestAudio, ModelId, ModelState } from "../types.js"

@@ -23,3 +23,12 @@ The Apache License text for these adapted files and assets is provided in
 LICENSE-APACHE-2.0. The package's original code remains MIT-licensed under
 LICENSE; that MIT license does not replace the terms above. Accordingly, the
 package metadata uses the SPDX expression MIT AND Apache-2.0.
+
+Consolidated runtime modules
+----------------------------
+
+The MIT-licensed code under src/core, src/fluidaudio, and swift was previously
+distributed as internal workspace support packages. It is now covered by this
+package's LICENSE. The pinned Swift manifest references FluidAudio 0.15.5;
+FluidAudio source and its dependencies are resolved by Swift Package Manager
+and are not included in this tarball.

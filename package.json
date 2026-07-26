@@ -3,14 +3,15 @@
   "private": true,
   "packageManager": "bun@1.3.14",
   "workspaces": [
-    "packages/*"
+    "packages/kokoro-local-runtime",
+    "packages/tts-lab"
   ],
   "scripts": {
-    "build": "bun run --cwd=packages/tts-runtime-core build && bun run --cwd=packages/fluidaudio-runtime build && bun run --cwd=packages/kokoro-local-runtime build && bun run --cwd=packages/tts-lab build",
+    "build": "bun run --cwd=packages/kokoro-local-runtime build && bun run --cwd=packages/tts-lab build",
     "start": "bun run build && bun run --cwd=packages/tts-lab start",
     "dev": "bun run build && bun run --cwd=packages/tts-lab dev",
-    "check": "bun run build",
-    "test": "bun run build && bun run --cwd=packages/tts-runtime-core test && bun run --cwd=packages/fluidaudio-runtime test && bun run --cwd=packages/kokoro-local-runtime test && bun run --cwd=packages/tts-lab test",
+    "check": "bun run --cwd=packages/kokoro-local-runtime check && bun run --cwd=packages/kokoro-local-runtime build && bun run --cwd=packages/tts-lab check",
+    "test": "bun run build && bun run --cwd=packages/kokoro-local-runtime test && bun run --cwd=packages/tts-lab test",
     "check:python": "python3 -m py_compile packages/kokoro-local-runtime/resources/kokoro_worker.py packages/tts-lab/src/python/infer.py"
   },
   "devDependencies": {
