@@ -9,14 +9,17 @@
   },
   "exports": {
     ".": {
+      "bun": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./core": {
+      "bun": "./src/core/index.ts",
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js"
     },
     "./fluidaudio": {
+      "bun": "./src/fluidaudio/index.ts",
       "types": "./dist/fluidaudio/index.d.ts",
       "import": "./dist/fluidaudio/index.js"
     }
@@ -25,6 +28,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "src",
     "resources/kokoro_worker.py",
     "swift/Package.swift",
     "swift/Package.resolved",

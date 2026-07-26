@@ -1,8 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": ".",
     "jsx": "preserve",
-    "jsxImportSource": "@opentui/solid"
+    "jsxImportSource": "@opentui/solid",
+    "paths": {
+      "kokoro-local-runtime": ["../kokoro-local-runtime/src/index.ts"],
+      "kokoro-local-runtime/core": ["../kokoro-local-runtime/src/core/index.ts"],
+      "kokoro-local-runtime/fluidaudio": ["../kokoro-local-runtime/src/fluidaudio/index.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

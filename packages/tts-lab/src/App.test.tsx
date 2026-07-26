@@ -60,6 +60,10 @@ class FakeController implements DemoController {
 
 afterEach(() => renderer?.renderer.destroy())
 
+test("resolves the Kokoro workspace from TypeScript source in Bun", () => {
+  expect(import.meta.resolve("kokoro-local-runtime")).toContain("/src/index.ts")
+})
+
 async function renderApp(controller: DemoController, width = 120, height = 32) {
   renderer = await createTestRenderer({ width, height })
   const keymap = createDefaultOpenTuiKeymap(renderer.renderer)

@@ -8,9 +8,9 @@
   ],
   "scripts": {
     "build": "bun run --cwd=packages/kokoro-local-runtime build && bun run --cwd=packages/tts-lab build",
-    "start": "bun run build && bun run --cwd=packages/tts-lab start",
-    "dev": "bun run build && bun run --cwd=packages/tts-lab dev",
-    "check": "bun run --cwd=packages/kokoro-local-runtime check && bun run --cwd=packages/kokoro-local-runtime build && bun run --cwd=packages/tts-lab check",
+    "start": "bun run --cwd=packages/tts-lab start",
+    "dev": "bun run --cwd=packages/tts-lab dev",
+    "check": "bun run --cwd=packages/kokoro-local-runtime check && bun run --cwd=packages/tts-lab check",
     "test": "bun run build && bun run --cwd=packages/kokoro-local-runtime test && bun run --cwd=packages/tts-lab test",
     "check:python": "python3 -m py_compile packages/kokoro-local-runtime/resources/kokoro_worker.py packages/tts-lab/src/python/infer.py"
   },

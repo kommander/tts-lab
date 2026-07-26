@@ -40,6 +40,8 @@ import { FluidAudioBuilder } from "kokoro-local-runtime/fluidaudio"
 
 The exported catalog contains the stable profile IDs, 28 English voices, pinned Python model assets, sizes, hashes, capability checks, and runtime restrictions. Existing TTS Lab cache paths remain compatible.
 
+Bun resolves the package's `bun` export condition directly to TypeScript source, both in the workspace and from a packed install. Node resolves compiled `dist`. Both forms are included in the package and verified independently.
+
 JavaScript profiles require Node 22+ or Bun 1.3+ and execute through Transformers.js 4.2.0 directly. The native profile requires macOS 14+, Apple Silicon, Swift 6, and Xcode Command Line Tools. Python setup is explicit and isolated under the supplied home directory.
 
 The JavaScript runtimes depend directly on `@huggingface/transformers` 4.2.0
