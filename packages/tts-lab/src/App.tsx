@@ -19,10 +19,7 @@ import {
   type SynthesisParameterDefinition,
   type SynthesisParameterValue,
 } from "kokoro-local-runtime/core"
-import type * as SolidTypes from "solid-js"
-// Node resolves Solid's server build; OpenTUI requires the reactive universal runtime.
-// @ts-expect-error Solid does not publish declarations for this explicit runtime path.
-import * as SolidRuntime from "solid-js/dist/solid.js"
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount } from "solid-js"
 import {
   adjustSynthesisParameter,
   describeSynthesisParameter,
@@ -30,8 +27,6 @@ import {
 } from "./lib/synthesis-parameters.js"
 import { MODEL_BY_ID, MODELS } from "./models.js"
 import type { DemoController, ModelId, ModelState } from "./types.js"
-
-const { createEffect, createMemo, createSignal, For, onCleanup, onMount } = SolidRuntime as typeof SolidTypes
 
 const COLORS = {
   background: "#18201B",

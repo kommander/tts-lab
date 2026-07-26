@@ -9,7 +9,7 @@
     "dev": "bun --watch run src/index.tsx",
     "build": "tsc --noEmit -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test && python3 -m unittest discover -s src/python -p 'test_*.py'"
+    "test": "bun test --preload @opentui/solid/preload && python3 -m unittest discover -s src/python -p 'test_*.py'"
   },
   "dependencies": {
     "@opentui/core": "0.4.5",
