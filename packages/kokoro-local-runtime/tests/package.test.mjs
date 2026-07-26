@@ -22,7 +22,7 @@ test("exports parameter support through runtime-selected package entry points", 
   assert.deepEqual(core.normalizeSynthesisParameters(root.KOKORO_PARAMETER_DEFINITIONS), { speed: 1 })
 })
 
-test("the runtime tarball is self-contained and excludes generated caches", async () => {
+test("the runtime tarball is self-contained and excludes generated caches", { timeout: 30_000 }, async () => {
   const { stdout } = await exec("npm", ["pack", "--dry-run", "--json", "--silent"], {
     cwd: `${workspace}/packages/kokoro-local-runtime`,
     maxBuffer: 4 * 1024 * 1024,
