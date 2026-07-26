@@ -1,0 +1,25 @@
+kokoro-js adapter
+-----------------
+
+src/kokoro-adapter.ts and src/phonemize.ts are adapted and modified from
+kokoro-js 1.2.1 source files src/kokoro.js, src/voices.js, and
+src/phonemize.js at:
+
+https://github.com/hexgrad/kokoro/tree/664c76a704021239ba59c84dcbaa4d3dece01fe9
+
+kokoro-js is authored by hexgrad with contributions by Xenova and is licensed
+under the Apache License, Version 2.0. The adaptations remove streaming and
+non-English support, load package-local voice tensors in Node/Bun, use
+TypeScript, and integrate directly with @huggingface/transformers 4.2.0.
+
+Kokoro voice tensors
+--------------------
+
+The 28 English .bin voice tensors under voices/ are copied from the kokoro-js
+1.2.1 npm package. They originate from the Apache-2.0 Kokoro-82M model assets
+published by hexgrad/onnx-community.
+
+The Apache License text for these adapted files and assets is provided in
+LICENSE-APACHE-2.0. The package's original code remains MIT-licensed under
+LICENSE; that MIT license does not replace the terms above. Accordingly, the
+package metadata uses the SPDX expression MIT AND Apache-2.0.

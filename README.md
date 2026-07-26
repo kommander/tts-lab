@@ -44,6 +44,19 @@ TTS_LAB_RESOURCE_POLL_MS=5000 bun start
 
 Installing every model can require more than 15 GB because each model has an isolated runtime.
 
+## Workspace
+
+This repository is a Bun monorepo with one lockfile:
+
+| Package | Purpose |
+|---|---|
+| `packages/tts-lab` | Private OpenTUI application |
+| `packages/kokoro-local-runtime` | Reusable Node/Bun Kokoro package with all five runtime profiles |
+| `packages/fluidaudio-runtime` | Shared lazy Swift sidecar builder used by Kokoro and Pocket TTS |
+| `packages/tts-runtime-core` | Portable downloads, subprocesses, uv bootstrap, and NDJSON workers |
+
+`kokoro-local-runtime` is intentionally private while its API and packaging are exercised inside the workspace. It performs no setup at import or package-install time.
+
 ## Controls
 
 | Key | Action |
@@ -82,7 +95,7 @@ Kokoro defaults to the reference Python/PyTorch runtime. Press `F3` to switch be
 - JavaScript / WebGPU FP32: experimental 326 MB profile using ONNX Runtime's native WebGPU provider; no Bun WebGPU flag required.
 - Native / CoreML ANE: experimental FluidAudio 0.15.5 sidecar for macOS 14+ on Apple Silicon; currently limited to `af_heart`.
 
-JavaScript profiles run in-process through `kokoro-js` 1.2.1 and Transformers.js 4.2.0. ONNX weights download on first use and remain cached. The CoreML profile builds its pinned Swift sidecar on first selection; first synthesis uses about 193 MiB of model/G2P assets and generates about 184 MiB of CoreML cache. Runtime choices persist in `.tts-lab/settings.json`.
+JavaScript profiles run in-process through a package-internal, Apache-2.0 Kokoro adapter with Transformers.js 4.2.0 and phonemizer 1.2.1. ONNX weights download on first use and remain cached. The CoreML profile builds its pinned Swift sidecar on first selection; first synthesis uses about 193 MiB of model/G2P assets and generates about 184 MiB of CoreML cache. Runtime choices persist in `.tts-lab/settings.json`.
 
 ### KittenTTS
 
@@ -107,7 +120,7 @@ The implementation was guided by the official [OpenTUI skill](https://skills.sh/
 ```bash
 bun run check
 bun test
-python3 -m py_compile src/python/infer.py
+bun run check:python
 ```
 
 Tests are headless and do not download model weights. Hardware-specific model setup remains an interactive smoke test.

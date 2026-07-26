@@ -1,0 +1,24 @@
+{
+  "name": "local-tts-lab",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.tsx",
+    "dev": "bun --watch run src/index.tsx",
+    "build": "tsc --noEmit -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "fft.js": "4.0.4",
+    "fluidaudio-runtime": "0.1.0",
+    "kokoro-local-runtime": "0.1.0",
+    "solid-js": "1.9.12",
+    "tts-runtime-core": "0.1.0"
+  }
+}

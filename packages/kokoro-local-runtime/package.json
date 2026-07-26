@@ -1,0 +1,44 @@
+{
+  "name": "kokoro-local-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT AND Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "resources/kokoro_worker.py",
+    "voices",
+    "LICENSE",
+    "LICENSE-APACHE-2.0",
+    "THIRD_PARTY_NOTICES",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "prepack": "npm run build",
+    "test": "bun test tests && node --test tests/*.test.mjs",
+    "check:python": "python3 -m py_compile resources/kokoro_worker.py"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.2.0",
+    "fluidaudio-runtime": "^0.1.0",
+    "phonemizer": "1.2.1",
+    "tts-runtime-core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.2"
+  }
+}
