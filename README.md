@@ -4,7 +4,7 @@ A local workbench for installing, comparing, and actually using open text-to-spe
 
 ## What It Does
 
-- Runs Kokoro, KittenTTS, Pocket TTS, Piper, MeloTTS, Parler-TTS, and F5-TTS through one workflow.
+- Runs Kokoro, KittenTTS, Pocket TTS, Qwen3-TTS, Piper, MeloTTS, Parler-TTS, and F5-TTS through one workflow.
 - Exposes model-specific voices, accents, and named speakers.
 - Installs Python-backed engines in isolated environments.
 - Downloads pinned model assets with resume support, progress reporting, and checksum verification.
@@ -19,6 +19,7 @@ A local workbench for installing, comparing, and actually using open text-to-spe
 - Python 3.8+ for Python-backed runtimes; JavaScript and native profiles do not require it
 - Swift 6 and the Xcode command-line tools for native CoreML profiles
 - KittenTTS on macOS requires macOS 14+ on Apple Silicon; its pinned ONNX Runtime has no Intel Mac wheel
+- Qwen3-TTS requires macOS 14+ on Apple Silicon with at least 16 GB unified memory
 - Git for MeloTTS and Parler-TTS packages
 - FFmpeg on `PATH` for F5-TTS
 - Internet access during model setup
@@ -76,6 +77,7 @@ This repository is a Bun monorepo with one lockfile and two packages:
 | Kokoro-82M | 28 English voices; PyTorch, ONNX CPU/WebGPU, or CoreML ANE | Apache-2.0 weights |
 | KittenTTS Nano | Eight English voices; 15M INT8 ONNX model on CPU | Apache-2.0 model/code; GPL-3.0+ phonemizer/eSpeak runtime |
 | Pocket TTS | Eight English CC0/CC BY voices; CoreML ANE FP16 | Apache-2.0 runtime; CC BY 4.0 model; per-voice terms |
+| Qwen3-TTS 0.6B | Nine preset voices; English MLX 4-bit profile | MIT MLX runtime; Apache-2.0 model |
 | Piper | Three US English medium voices; CPU-first | GPL-3.0+ runtime; selected voices have non-commercial or research terms |
 | MeloTTS | Five English accents | MIT model and code |
 | Parler-TTS Mini v1.1 | 34 named, prompt-directed speakers | Apache-2.0 |
@@ -102,6 +104,10 @@ JavaScript profiles run in-process through a package-internal, Apache-2.0 Kokoro
 ### Pocket TTS
 
 [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) uses FluidAudio 0.15.5 with a pinned 350.5 MiB English FP16 graph. Autoregressive inference targets ANE with CPU Mimi decoding; CoreML may schedule conditioning on GPU. Only the required graph and selected voice files are downloaded, and mutable upstream downloads are disabled. Alba is CC BY 4.0, while the other exposed voices are CC0. Voice cloning, multilingual packs, separate GPU/int8 profiles, and unstable ANE-state execution are intentionally not exposed. Pocket's model-card prohibited-use policy also applies.
+
+### Qwen3-TTS
+
+[Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) uses MLX-Audio 0.4.6 and the immutable 0.6B CustomVoice 4-bit conversion. Seven verified model files total 1.58 GiB. The initial profile exposes nine preset speakers in English with deterministic fixed-seed sampling, at most 42 input text tokens, and a 256-codec-token output ceiling. Output that reaches the ceiling without EOS is rejected rather than silently truncated. Voice cloning, multilingual generation, voice design, style instructions, and unseeded generation are intentionally not exposed. Although resident RSS is about 1.9 GB on the tested M5 Max, transient MLX allocation reached about 5.7 GB, so setup requires macOS 14+ on Apple Silicon with at least 16 GB memory.
 
 Runtime statistics are session-local and separate per profile. JavaScript ONNX memory is included in app RSS; Python and CoreML workers report available current and peak RSS. These are process-level values, not model-tensor estimates.
 

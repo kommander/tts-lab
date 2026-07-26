@@ -126,6 +126,7 @@ test("defines model-specific voice catalogs", () => {
   expect(MODEL_BY_ID.kokoro.voices).toHaveLength(28)
   expect(MODEL_BY_ID.kitten.voices).toHaveLength(8)
   expect(MODEL_BY_ID.pocket.voices).toHaveLength(8)
+  expect(MODEL_BY_ID.qwen.voices).toHaveLength(9)
   expect(MODEL_BY_ID.piper.voices).toHaveLength(3)
   expect(MODEL_BY_ID.melo.voices).toHaveLength(5)
   expect(MODEL_BY_ID.parler.voices).toHaveLength(34)
@@ -153,6 +154,13 @@ test("defines verified Kokoro runtime profiles with Python as default", () => {
   expect(pocketRuntime.assets?.reduce((sum, asset) => sum + asset.size, 0)).toBe(367490063)
   expect(pocketRuntime.assets?.every((asset) => asset.sha256 && asset.url.includes("1bd207828251accf30f09a965c84856cd874e9f4"))).toBe(true)
   expect(MODEL_BY_ID.pocket.voices.slice(1).every((voice) => voice.assets?.every((asset) => asset.sha256))).toBe(true)
+  const qwenRuntime = MODEL_BY_ID.qwen.runtimes[0]!
+  expect(qwenRuntime.id).toBe("python-mlx-4bit")
+  expect(qwenRuntime.platforms).toEqual(["darwin"])
+  expect(qwenRuntime.minimumDarwinMajor).toBe(23)
+  expect(qwenRuntime.minimumMemoryBytes).toBe(16 * 1024 ** 3)
+  expect(MODEL_BY_ID.qwen.assets.reduce((sum, asset) => sum + asset.size, 0)).toBe(1693530022)
+  expect(MODEL_BY_ID.qwen.assets.every((asset) => asset.sha256 && asset.url.includes("08c72cad5e2fd0f41730c8bd1f28149585e46361"))).toBe(true)
   for (const model of MODELS.slice(1)) expect(model.runtimes).toHaveLength(1)
 })
 

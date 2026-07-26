@@ -133,6 +133,9 @@ def check(model: str, assets: Path) -> None:
     if model == "kitten":
         emit("status", detail="Checking KittenTTS Nano INT8 model")
         create_kitten_model(assets)
+    elif model == "qwen":
+        emit("status", detail="Checking Qwen3-TTS MLX model")
+        create_qwen_model(assets)
     elif model == "piper":
         import piper  # noqa: F401
     elif model == "melo":
@@ -189,6 +192,74 @@ def load_kitten(assets: Path):
         if audio.ndim != 1 or audio.size == 0 or not np.isfinite(audio).all():
             raise RuntimeError("KittenTTS produced invalid audio")
         sf.write(output, audio, 24000, subtype="PCM_16")
+
+    return synthesize
+
+
+QWEN_SPEAKERS = {
+    "serena", "vivian", "uncle_fu", "ryan", "aiden", "ono_anna", "sohee", "eric", "dylan"
+}
+QWEN_MAX_AUDIO_TOKENS = 256
+QWEN_AUDIO_TOKENS_PER_TEXT_TOKEN = 6
+QWEN_MAX_TEXT_TOKENS = QWEN_MAX_AUDIO_TOKENS // QWEN_AUDIO_TOKENS_PER_TEXT_TOKEN
+
+
+def create_qwen_model(assets: Path):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    from mlx_audio.tts.utils import load_model
+
+    return load_model(assets)
+
+
+def load_qwen(assets: Path):
+    import mlx.core as mx
+    import numpy as np
+
+    emit("status", detail="Loading Qwen3-TTS 0.6B CustomVoice 4-bit on MLX")
+    model = create_qwen_model(assets)
+
+    def synthesize(text: str, output: Path, request_id: str | None = None, voice_id: str | None = None) -> None:
+        voice_id = (voice_id or "ryan").lower()
+        if voice_id not in QWEN_SPEAKERS:
+            raise ValueError(f"Unknown Qwen3-TTS speaker: {voice_id}")
+        text_tokens = len(model.tokenizer.encode(text))
+        if text_tokens > QWEN_MAX_TEXT_TOKENS:
+            raise ValueError(
+                f"Qwen3-TTS input is too long ({text_tokens} text tokens); "
+                f"the deterministic profile allows at most {QWEN_MAX_TEXT_TOKENS}"
+            )
+        emit_request(request_id, "status", detail=f"Synthesizing with Qwen3-TTS {voice_id} on MLX")
+        mx.random.seed(42)
+        results = list(model.generate_custom_voice(
+            text=text,
+            speaker=voice_id,
+            language="English",
+            instruct=None,
+            temperature=0.7,
+            max_tokens=QWEN_MAX_AUDIO_TOKENS,
+            top_k=50,
+            top_p=1.0,
+            repetition_penalty=1.05,
+            verbose=False,
+            stream=False,
+        ))
+        if not results:
+            raise RuntimeError("Qwen3-TTS produced no audio")
+        if any(int(result.token_count) >= QWEN_MAX_AUDIO_TOKENS for result in results):
+            raise RuntimeError("Qwen3-TTS reached the 256-token safety ceiling before emitting EOS")
+        sample_rates = {int(result.sample_rate) for result in results}
+        if sample_rates != {24000}:
+            raise RuntimeError(f"Qwen3-TTS returned unexpected sample rates: {sorted(sample_rates)}")
+        audio = np.concatenate([np.asarray(result.audio, dtype=np.float32).reshape(-1) for result in results])
+        if audio.size == 0 or not np.isfinite(audio).all():
+            raise RuntimeError("Qwen3-TTS produced invalid audio")
+        pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2")
+        with wave.open(str(output), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(pcm.tobytes())
 
     return synthesize
 
@@ -358,6 +429,7 @@ def load_f5(assets: Path):
 
 LOADERS = {
     "kitten": load_kitten,
+    "qwen": load_qwen,
     "piper": load_piper,
     "melo": load_melo,
     "parler": load_parler,
@@ -406,7 +478,7 @@ def serve(model_name: str, assets: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, choices=["kitten", "piper", "melo", "parler", "f5"])
+    parser.add_argument("--model", required=True, choices=["kitten", "qwen", "piper", "melo", "parler", "f5"])
     parser.add_argument("--assets", required=True)
     parser.add_argument("--output")
     parser.add_argument("--voice")

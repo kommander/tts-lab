@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { constants, readFileSync } from "node:fs"
 import { appendFile, copyFile, mkdir, readFile, rm, stat } from "node:fs/promises"
-import { release } from "node:os"
+import { release, totalmem } from "node:os"
 import { dirname, extname, join, resolve } from "node:path"
 import {
   FluidAudioBuilder,
@@ -68,7 +68,10 @@ export function supportsRuntimePlatform(
   platform: NodeJS.Platform,
   arch: string,
   kernelRelease: string,
+  totalMemoryBytes: number = totalmem(),
 ): boolean {
+  if (runtime.platforms && !runtime.platforms.includes(platform)) return false
+  if (runtime.minimumMemoryBytes && totalMemoryBytes < runtime.minimumMemoryBytes) return false
   if (platform !== "darwin") return true
   const darwinMajor = Number.parseInt(kernelRelease.split(".")[0] ?? "", 10)
   return (!runtime.darwinArch || runtime.darwinArch === arch)
@@ -200,7 +203,7 @@ export class ModelManager implements DemoController {
   async ensure(id: ModelId): Promise<void> {
     const runtime = this.runtime(id)
     if (!supportsRuntimePlatform(runtime, process.platform, process.arch, release())) {
-      const message = `${MODEL_BY_ID[id].name} requires macOS 14 or newer on Apple Silicon`
+      const message = `${MODEL_BY_ID[id].name} requires ${runtime.platformDescription ?? "macOS 14 or newer on Apple Silicon"}`
       this.patch(id, { installed: false, phase: "error", detail: message, error: message })
       throw new Error(message)
     }

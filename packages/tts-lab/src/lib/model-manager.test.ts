@@ -57,6 +57,8 @@ test("applies runtime-specific macOS requirements without blocking other platfor
   expect(supportsRuntimePlatform(runtime, "darwin", "x64", "25.0.0")).toBe(false)
   expect(supportsRuntimePlatform(runtime, "darwin", "arm64", "22.0.0")).toBe(false)
   expect(supportsRuntimePlatform(runtime, "linux", "x64", "6.0.0")).toBe(true)
+  expect(supportsRuntimePlatform({ ...runtime, platforms: ["darwin"] }, "linux", "arm64", "6.0.0")).toBe(false)
+  expect(supportsRuntimePlatform({ ...runtime, minimumMemoryBytes: 16 }, "darwin", "arm64", "23.0.0", 8)).toBe(false)
 })
 
 test("copies generated audio without overwriting an existing file", async () => {

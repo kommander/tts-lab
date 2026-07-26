@@ -17,7 +17,7 @@ export interface RuntimeProfile {
   description: string
   kind: "python" | "javascript" | "native"
   dtype?: "q8" | "fp32"
-  device?: "cpu" | "webgpu"
+  device?: "cpu" | "webgpu" | "mlx"
   lowMemory?: boolean
   modelBytes?: number
   modelFile?: string
@@ -26,6 +26,9 @@ export interface RuntimeProfile {
   assets?: readonly ModelAsset[]
   darwinArch?: "arm64"
   minimumDarwinMajor?: number
+  platforms?: readonly NodeJS.Platform[]
+  platformDescription?: string
+  minimumMemoryBytes?: number
 }
 
 export interface ModelDefinition {
@@ -62,6 +65,7 @@ const BERT_REVISION = "86b5e0934494bd15c9632b12f734a8a67f723594"
 const KITTEN_CODE_REVISION = "9f3e0d8b6600b56ebe1b4d7b6d8e1e020077d1f2"
 const KITTEN_MODEL_REVISION = "84781d74e29ee25217551556398b42f80593a813"
 const POCKET_COREML_REVISION = "1bd207828251accf30f09a965c84856cd874e9f4"
+const QWEN_MLX_REVISION = "08c72cad5e2fd0f41730c8bd1f28149585e46361"
 
 const parlerSpeakerNames = [
   "Jon", "Lea", "Gary", "Jenna", "Mike", "Laura", "Lauren", "Eileen", "Alisa", "Karen", "Barbara",
@@ -123,6 +127,25 @@ const pocketVoices: VoiceDefinition[] = pocketVoiceData.map(([id, name, descript
     ? undefined
     : [pocketAsset(`v2.1/english/constants_bin/${id}.safetensors`, size, sha256)],
 }))
+
+const qwenAsset = (path: string, size: number, sha256: string): ModelAsset => ({
+  path,
+  url: hf("mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit", QWEN_MLX_REVISION, path),
+  size,
+  sha256,
+})
+
+const qwenVoices: VoiceDefinition[] = [
+  ["ryan", "Ryan", "English male; dynamic and rhythmic"],
+  ["aiden", "Aiden", "American English male; clear delivery"],
+  ["serena", "Serena", "Chinese female; warm and gentle"],
+  ["vivian", "Vivian", "Chinese female; bright and youthful"],
+  ["uncle_fu", "Uncle Fu", "Chinese male; low and mellow"],
+  ["ono_anna", "Ono Anna", "Japanese female; playful delivery"],
+  ["sohee", "Sohee", "Korean female; warm and emotional"],
+  ["eric", "Eric", "Chinese male; Sichuan dialect profile"],
+  ["dylan", "Dylan", "Chinese male; Beijing dialect profile"],
+].map(([id, name, description]) => ({ id, name, description }))
 
 const pythonRuntime = (description: string): RuntimeProfile => ({
   id: "python-pytorch-fp32",
@@ -236,6 +259,83 @@ export const MODELS: readonly ModelDefinition[] = [
     setupVersion: "pocket-fluid-0.15.5-ane-v1",
     note: "Fixed licensed voices only. Voice cloning and mutable upstream downloads are intentionally disabled.",
     assets: [],
+  },
+  {
+    id: "qwen",
+    name: "Qwen3-TTS",
+    tagline: "Expressive preset voices on Apple MLX",
+    footprint: "~0.9B serialized parameters · 1.58 GiB assets",
+    license: "MIT MLX runtime / Apache-2.0 model",
+    python: "3.12",
+    packages: [
+      "annotated-doc==0.0.4",
+      "anyio==4.14.2",
+      "certifi==2026.7.22",
+      "cffi==2.1.0",
+      "click==8.4.2",
+      "filelock==3.32.0",
+      "fsspec==2026.6.0",
+      "h11==0.16.0",
+      "hf-xet==1.5.2",
+      "httpcore==1.0.9",
+      "httpx==0.28.1",
+      "huggingface-hub==1.24.0",
+      "idna==3.18",
+      "jinja2==3.1.6",
+      "markdown-it-py==4.2.0",
+      "markupsafe==3.0.3",
+      "mdurl==0.1.2",
+      "miniaudio==1.71",
+      "mlx==0.32.0",
+      "mlx-audio==0.4.6",
+      "mlx-lm==0.31.3",
+      "mlx-metal==0.32.0",
+      "numpy==2.5.1",
+      "packaging==26.2",
+      "protobuf==7.35.1",
+      "psutil==7.2.2",
+      "pycparser==3.0",
+      "pygments==2.20.0",
+      "pyyaml==6.0.3",
+      "regex==2026.7.19",
+      "rich==15.0.0",
+      "safetensors==0.8.0",
+      "scipy==1.18.0",
+      "sentencepiece==0.2.2",
+      "shellingham==1.5.4",
+      "sounddevice==0.5.5",
+      "tokenizers==0.22.2",
+      "tqdm==4.69.1",
+      "transformers==5.12.1",
+      "typer==0.27.0",
+      "typing-extensions==4.16.0",
+    ],
+    voices: qwenVoices,
+    defaultVoiceId: "ryan",
+    runtimes: [{
+      id: "python-mlx-4bit",
+      name: "Python / MLX 4-bit",
+      description: "Pinned 0.6B CustomVoice model; deterministic Apple Silicon inference",
+      kind: "python",
+      device: "mlx",
+      platforms: ["darwin"],
+      darwinArch: "arm64",
+      minimumDarwinMajor: 23,
+      minimumMemoryBytes: 16 * 1024 ** 3,
+      platformDescription: "macOS 14+ on Apple Silicon with at least 16 GB memory",
+    }],
+    defaultRuntimeId: "python-mlx-4bit",
+    setupVersion: "qwen3-tts-0.6b-custom-mlx-4bit-v1",
+    note: "Experimental English preset-voice profile. Fixed-seed sampling is intentional; cloning and voice design are not exposed.",
+    assets: [
+      qwenAsset("config.json", 6058, "612cb591b44547319e5c68a78c0e93e4defb57882a4aa9ef5f06cc2f071ed036"),
+      qwenAsset("merges.txt", 1671839, "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"),
+      qwenAsset("model.safetensors", 1006772520, "4ab02a20be381700f6e73dbb5efdc424cadf9f1d0652cbffd662872ea41e296a"),
+      qwenAsset("speech_tokenizer/config.json", 2336, "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167"),
+      qwenAsset("speech_tokenizer/model.safetensors", 682293092, "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"),
+      qwenAsset("tokenizer_config.json", 7344, "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670"),
+      qwenAsset("vocab.json", 2776833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+    ],
   },
   {
     id: "piper",
