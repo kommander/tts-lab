@@ -161,9 +161,6 @@ private actor KokoroBackend: SpeechBackend {
 
     func synthesize(text: String, voice: String?, parameters: [String: JSONScalar]?) async throws -> Data {
         let selected = voice ?? "af_heart"
-        guard selected == "af_heart" else {
-            throw BackendError.unsupportedVoice("Kokoro CoreML ANE currently supports only af_heart")
-        }
         return try await manager.synthesize(text: text, voice: selected, speed: KokoroParameters.parse(parameters))
     }
 

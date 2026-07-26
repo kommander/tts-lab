@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { commandExists, runProcess } from "../core/index.js"
 
 export const FLUIDAUDIO_VERSION = "0.15.5"
-export const FLUIDAUDIO_BUILD_VERSION = `${FLUIDAUDIO_VERSION}-v3`
+export const FLUIDAUDIO_BUILD_VERSION = `${FLUIDAUDIO_VERSION}-v5`
 export const FLUIDAUDIO_PRODUCT = "tts-lab-fluidaudio"
 
 const SWIFT_PACKAGE_PATH = fileURLToPath(new URL("../../swift", import.meta.url))

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { afterEach, test } from "node:test"
-import { chmod, mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, truncate, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -36,7 +36,7 @@ test("owns the stable catalog and runtime IDs", () => {
     "native-coreml-ane",
   ])
   assert.equal(KOKORO_MODEL.runtimes.find(({ id }) => id === "javascript-onnx-fp32").lowMemory, true)
-  assert.deepEqual(KOKORO_MODEL.runtimes.find(({ id }) => id === "native-coreml-ane").voiceIds, ["af_heart"])
+  assert.equal(KOKORO_MODEL.runtimes.find(({ id }) => id === "native-coreml-ane").voiceIds, undefined)
   assert.deepEqual(KOKORO_DEFAULT_PARAMETERS, { speed: 1 })
   for (const runtime of KOKORO_MODEL.runtimes) {
     assert.deepEqual(runtime.parameters, [{
@@ -67,7 +67,10 @@ test("reports runtime capabilities", () => {
   assert.equal(getKokoroCapability("python-pytorch-fp32", "linux", "x64", "6.0.0").supported, true)
   assert.equal(getKokoroCapability("native-coreml-ane", "darwin", "arm64", "23.0.0").supported, true)
   assert.match(getKokoroCapability("native-coreml-ane", "darwin", "x64", "25.0.0").reason, /Apple Silicon/)
-  assert.deepEqual(getKokoroCapability("native-coreml-ane", "darwin", "arm64", "23.0.0").voices, ["af_heart"])
+  assert.deepEqual(
+    getKokoroCapability("native-coreml-ane", "darwin", "arm64", "23.0.0").voices,
+    KOKORO_VOICES.map(({ id }) => id),
+  )
   assert.equal(getKokoroCapability("javascript-onnx-q8", "linux", "arm64").supported, true)
   assert.equal(getKokoroCapability("javascript-webgpu-fp32", "linux", "arm64").supported, false)
   assert.equal(getKokoroCapability("javascript-webgpu-fp32", "freebsd", "x64").supported, false)
@@ -81,6 +84,25 @@ test("constructing and importing perform no filesystem setup", async () => {
   assert.equal(runtime.paths.homeDir, home)
   await import(new URL(`../dist/index.js?side-effect=${Date.now()}`, import.meta.url))
   await assert.rejects(() => import("node:fs/promises").then(({ stat }) => stat(home)), { code: "ENOENT" })
+  await runtime.dispose()
+})
+
+test("prepares and repairs every bundled native voice without downloading", async () => {
+  directory = await mkdtemp(join(tmpdir(), "kokoro-native-voices-"))
+  const runtime = createKokoro({ homeDir: directory })
+  assert.equal(await runtime.nativeVoicesReady(), false)
+  await runtime.prepareNativeVoices()
+  assert.equal(await runtime.nativeVoicesReady(), true)
+  assert.deepEqual(
+    (await readdir(runtime.paths.nativeVoiceDir)).sort(),
+    KOKORO_VOICES.map(({ id }) => `${id}.bin`).sort(),
+  )
+  const bella = join(runtime.paths.nativeVoiceDir, "af_bella.bin")
+  await writeFile(bella, "corrupt")
+  assert.equal(await runtime.nativeVoicesReady(), false)
+  await runtime.prepareNativeVoices()
+  assert.equal((await readFile(bella)).byteLength, 522240)
+  assert.equal(await runtime.nativeVoicesReady(), true)
   await runtime.dispose()
 })
 

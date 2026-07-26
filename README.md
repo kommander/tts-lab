@@ -109,7 +109,7 @@ Kokoro defaults to the reference Python/PyTorch runtime. Press `F3` to switch be
 - JavaScript / ONNX Q8 Compact: 92 MB low-download model; smaller but slower than FP32 on the tested Apple Silicon system.
 - JavaScript / ONNX FP32: 326 MB full-precision CPU model with lower-memory ONNX session settings.
 - JavaScript / WebGPU FP32: experimental 326 MB profile using ONNX Runtime's native WebGPU provider; no Bun WebGPU flag required.
-- Native / CoreML ANE: experimental FluidAudio 0.15.5 sidecar for macOS 14+ on Apple Silicon; currently limited to `af_heart`.
+- Native / CoreML ANE: experimental FluidAudio 0.15.5 sidecar for macOS 14+ on Apple Silicon with all 28 bundled English voices.
 
 JavaScript profiles run in-process through a package-internal, Apache-2.0 Kokoro adapter with Transformers.js 4.2.0 and phonemizer 1.2.1. ONNX weights download on first use and remain cached. The CoreML profile builds its pinned Swift sidecar on first selection; first synthesis uses about 193 MiB of model/G2P assets and generates about 184 MiB of CoreML cache. Runtime and tuning choices persist in `.tts-lab/settings.json`.
 

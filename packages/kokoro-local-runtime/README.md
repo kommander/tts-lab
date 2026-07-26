@@ -35,7 +35,7 @@ import { downloadAssets, NdjsonRuntimeWorker } from "kokoro-local-runtime/core"
 import { FluidAudioBuilder } from "kokoro-local-runtime/fluidaudio"
 ```
 
-`core` contains resumable downloads, process-tree cancellation, shared uv bootstrap, and the concurrent NDJSON worker. `fluidaudio` contains the shared lazy builder and backend command helpers. Kokoro and Pocket use the same `FluidAudioBuilder`, pinned Swift package, cache path `<homeDir>/tools/fluidaudio-0.15.5-v3`, and `tts-lab-fluidaudio` product.
+`core` contains resumable downloads, process-tree cancellation, shared uv bootstrap, and the concurrent NDJSON worker. `fluidaudio` contains the shared lazy builder and backend command helpers. Kokoro and Pocket use the same `FluidAudioBuilder`, pinned Swift package, cache path `<homeDir>/tools/fluidaudio-0.15.5-v5`, and `tts-lab-fluidaudio` product.
 
 ## Profiles
 

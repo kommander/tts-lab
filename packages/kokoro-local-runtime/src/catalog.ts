@@ -163,10 +163,9 @@ export const KOKORO_RUNTIMES: KokoroRuntimeDescriptor[] = [
   {
     id: "native-coreml-ane",
     name: "Native / CoreML ANE",
-    description: "Experimental Apple Silicon backend; macOS 14+ and Heart voice only",
+    description: "Experimental Apple Silicon backend with all 28 bundled English voices",
     kind: "native",
     nativeBackend: "kokoro",
-    voiceIds: [KOKORO_DEFAULT_VOICE_ID],
     parameters: KOKORO_PARAMETER_DEFINITIONS,
   },
 ]

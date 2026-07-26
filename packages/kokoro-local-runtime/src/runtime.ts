@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { access, appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { access, appendFile, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -37,7 +37,9 @@ const UV_VERSION = "0.11.32"
 const PYTHON_VERSION = "3.11"
 const PYTHON_PACKAGES = ["kokoro==0.9.4", "soundfile"] as const
 const PYTHON_WORKER = fileURLToPath(new URL("../resources/kokoro_worker.py", import.meta.url))
+const BUNDLED_VOICE_DIR = fileURLToPath(new URL("../voices", import.meta.url))
 const JAVASCRIPT_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX"
+const NATIVE_VOICE_BYTES = 510 * 256 * Float32Array.BYTES_PER_ELEMENT
 
 export type KokoroPhase = "bootstrap" | "setup" | "download" | "verify" | "ready"
 
@@ -76,6 +78,7 @@ export interface KokoroPaths {
   uvDir: string
   javascriptCacheDir: string
   nativeHomeDir: string
+  nativeVoiceDir: string
   hfCacheDir: string
   logPath: string
   pythonWorker: string
@@ -383,6 +386,7 @@ export class KokoroRuntime {
       uvDir: join(homeDir, "tools", "uv"),
       javascriptCacheDir: join(modelDir, "javascript-cache"),
       nativeHomeDir: join(homeDir, "native-home"),
+      nativeVoiceDir: join(homeDir, "native-home", ".cache", "fluidaudio", "Models", "kokoro-82m-coreml", "ANE"),
       hfCacheDir: join(homeDir, "hf-cache", "kokoro"),
       logPath: join(homeDir, "logs", "kokoro.log"),
       pythonWorker: PYTHON_WORKER,
@@ -428,14 +432,23 @@ export class KokoroRuntime {
       }
     }
     if (runtime.kind === "native") {
-      const binary = await this.fluidAudioBuilder.findBinary()
+      const [binary, voicesReady] = await Promise.all([
+        this.fluidAudioBuilder.findBinary(),
+        this.nativeVoicesReady(),
+      ])
+      const ready = Boolean(binary) && voicesReady
+      const voiceBytes = KOKORO_VOICES.length * NATIVE_VOICE_BYTES
       return {
         ...capability,
-        ready: Boolean(binary),
-        cached: Boolean(binary),
-        detail: binary ? "Ready; CoreML models download on first use" : "FluidAudio sidecar is not built",
-        downloadedBytes: 0,
-        totalBytes: 0,
+        ready,
+        cached: ready,
+        detail: ready
+          ? "Ready; bundled native voices verified, CoreML models download on first use"
+          : binary
+            ? "Bundled native voices are not prepared"
+            : "FluidAudio sidecar is not built",
+        downloadedBytes: voicesReady ? voiceBytes : 0,
+        totalBytes: voiceBytes,
       }
     }
     let markerVersion: string | undefined
@@ -616,7 +629,7 @@ export class KokoroRuntime {
       throw new KokoroRuntimeError("INVALID_VOICE", `${runtimeById(options.runtimeId).name} does not support ${voice}`, options.runtimeId)
     }
     await this.prepare(options.runtimeId, options)
-    if (runtimeById(options.runtimeId).kind !== "javascript") await this.ensureVoice(voice, options)
+    if (runtimeById(options.runtimeId).kind === "python") await this.ensureVoice(voice, options)
     const started = await this.start(options.runtimeId, options)
     try {
       options.signal?.throwIfAborted()
@@ -676,14 +689,51 @@ export class KokoroRuntime {
   }
 
   private async prepareNative(runtimeId: KokoroRuntimeId, options: KokoroOperationOptions): Promise<void> {
-    options.onEvent?.({ type: "status", phase: "setup", detail: "Building pinned FluidAudio CoreML sidecar" })
-    await this.fluidAudioBuilder.build({
-      signal: options.signal,
-      logPath: this.paths.logPath,
-      onStatus: (detail) => options.onEvent?.({ type: "status", phase: "setup", detail }),
-    })
+    options.onEvent?.({ type: "status", phase: "setup", detail: "Preparing FluidAudio and bundled native voices" })
+    await Promise.all([
+      this.fluidAudioBuilder.build({
+        signal: options.signal,
+        logPath: this.paths.logPath,
+        onStatus: (detail) => options.onEvent?.({ type: "status", phase: "setup", detail }),
+      }),
+      this.prepareNativeVoices(options.signal),
+    ])
     options.signal?.throwIfAborted()
     if (!(await this.inspect(runtimeId)).ready) throw new Error("FluidAudio build completed without a reusable binary")
+  }
+
+  private async nativeVoicesReady(): Promise<boolean> {
+    try {
+      for (const voice of KOKORO_VOICES) {
+        const [bundled, prepared] = await Promise.all([
+          readFile(join(BUNDLED_VOICE_DIR, `${voice.id}.bin`)),
+          readFile(join(this.paths.nativeVoiceDir, `${voice.id}.bin`)),
+        ])
+        if (bundled.byteLength !== NATIVE_VOICE_BYTES || !bundled.equals(prepared)) return false
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async prepareNativeVoices(signal?: AbortSignal): Promise<void> {
+    await mkdir(this.paths.nativeVoiceDir, { recursive: true })
+    for (const voice of KOKORO_VOICES) {
+      signal?.throwIfAborted()
+      const source = join(BUNDLED_VOICE_DIR, `${voice.id}.bin`)
+      const destination = join(this.paths.nativeVoiceDir, `${voice.id}.bin`)
+      const temporary = `${destination}.${process.pid}.tmp`
+      try {
+        await copyFile(source, temporary)
+        if ((await stat(temporary)).size !== NATIVE_VOICE_BYTES) {
+          throw new Error(`Invalid bundled native voice: ${voice.id}`)
+        }
+        await rename(temporary, destination)
+      } finally {
+        await rm(temporary, { force: true })
+      }
+    }
   }
 
   private async preparePython(_runtimeId: KokoroRuntimeId, options: KokoroOperationOptions): Promise<void> {

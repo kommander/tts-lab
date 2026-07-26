@@ -352,18 +352,12 @@ test("configuration activity only blocks synthesis for the affected model", asyn
   expect(output.trim()).toBe("qwen")
 })
 
-test("serializes rapid runtime and voice selections without unsupported pairings", async () => {
+test("preserves voice selection across rapid native runtime changes", async () => {
   directory = await mkdtemp(join(tmpdir(), "tts-lab-runtime-voice-race-"))
   const output = await runManager(`
     const manager = new ModelManager();
     manager.ensure = async () => {};
     manager.ensureVoice = async () => {};
-    const invalid = [];
-    manager.subscribe(state => {
-      if (state.id === "kokoro" && state.runtimeId === "native-coreml-ane" && state.voiceId !== "af_heart") {
-        invalid.push([state.runtimeId, state.voiceId]);
-      }
-    });
     const runtimeThenVoice = await Promise.allSettled([
       manager.setRuntime("kokoro", "native-coreml-ane"),
       manager.setVoice("kokoro", "af_bella"),
@@ -380,17 +374,29 @@ test("serializes rapid runtime and voice selections without unsupported pairings
       afterRuntimeThenVoice: [afterRuntimeThenVoice.runtimeId, afterRuntimeThenVoice.voiceId],
       voiceThenRuntime: voiceThenRuntime.map(result => result.status),
       afterVoiceThenRuntime: [afterVoiceThenRuntime.runtimeId, afterVoiceThenRuntime.voiceId],
-      invalid,
     }));
     await manager.dispose();
   `)
   expect(JSON.parse(output)).toEqual({
-    runtimeThenVoice: ["fulfilled", "Native / CoreML ANE does not support Bella (US)"],
-    afterRuntimeThenVoice: ["native-coreml-ane", "af_heart"],
+    runtimeThenVoice: ["fulfilled", "fulfilled"],
+    afterRuntimeThenVoice: ["native-coreml-ane", "af_bella"],
     voiceThenRuntime: ["fulfilled", "fulfilled"],
-    afterVoiceThenRuntime: ["native-coreml-ane", "af_heart"],
-    invalid: [],
+    afterVoiceThenRuntime: ["native-coreml-ane", "af_bella"],
   })
+})
+
+test("uses bundled native Kokoro voices without Python voice downloads", async () => {
+  directory = await mkdtemp(join(tmpdir(), "tts-lab-native-voice-"))
+  const output = await runManager(`
+    const manager = new ModelManager();
+    manager.patch("kokoro", { runtimeId: "native-coreml-ane", voiceId: "af_bella" });
+    let downloads = 0;
+    manager.kokoro.ensureVoice = async () => { downloads += 1; };
+    await manager.ensureVoice("kokoro", "af_bella");
+    console.log(downloads);
+    await manager.dispose();
+  `)
+  expect(output.trim()).toBe("0")
 })
 
 test("superseded voice selection stops after teardown without obsolete setup", async () => {

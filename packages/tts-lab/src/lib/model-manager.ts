@@ -1339,7 +1339,7 @@ export class ModelManager implements DemoController {
     const voice = model.voices.find((candidate) => candidate.id === voiceId)
     if (!voice) throw new Error(`Unknown ${model.name} voice: ${voiceId}`)
     const runtimeId = this.states[id].runtimeId
-    if (this.runtime(id).kind === "javascript") return
+    if (["javascript", "native"].includes(this.runtime(id).kind)) return
     if (id === "kokoro" && !voice.assets?.length) {
       await this.kokoro.ensureVoice(voiceId as KokoroVoiceId, {
         signal: this.controller.signal,
