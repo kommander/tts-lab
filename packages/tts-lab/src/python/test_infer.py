@@ -78,6 +78,41 @@ class SynthesisParameterTests(unittest.TestCase):
         self.assertEqual(generated[0]["temperature"], 0.9)
         self.assertEqual(generated[0]["max_tokens"], 256)
 
+    def test_qwen_preserves_unpunctuated_lines_when_falling_back_from_missing_eos(self):
+        lines = [
+            "singing karaoke in my mansion",
+            "silver dragon fish swimming in the pond",
+            "Brought my uncle a tea set",
+            "He grinds the ink and writes four characters for me",
+        ]
+        text = "\n".join(lines)
+        tokenizer = SimpleNamespace(encode=lambda value: value.replace("\n", " ").split())
+        calls = []
+
+        def generate(segment, seed):
+            calls.append((segment, seed))
+            return [SimpleNamespace(token_count=256 if segment == text else 40)]
+
+        results = infer.generate_qwen_segments(text, tokenizer, generate, 42)
+        self.assertEqual([result.token_count for result in results], [40, 40, 40, 40])
+        self.assertEqual([segment for segment, _seed in calls[1:]], lines)
+        self.assertEqual([seed for _segment, seed in calls], [42, 42, 42, 42, 42])
+
+    def test_qwen_prechunks_long_unpunctuated_input_without_dropping_words(self):
+        words = [f"word{index}" for index in range(60)]
+        text = " ".join(words)
+        tokenizer = SimpleNamespace(encode=lambda value: value.split())
+        calls = []
+
+        def generate(segment, seed):
+            calls.append((segment, seed))
+            return [SimpleNamespace(token_count=20)]
+
+        infer.generate_qwen_segments(text, tokenizer, generate, 9)
+        self.assertEqual(" ".join(segment for segment, _seed in calls).split(), words)
+        self.assertTrue(all(len(tokenizer.encode(segment)) <= 12 for segment, _seed in calls))
+        self.assertGreater(len(calls), 1)
+
     def test_piper_and_f5_forward_only_public_parameters(self):
         piper = ModuleType("piper")
         piper_voice = MagicMock()
