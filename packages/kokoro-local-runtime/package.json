@@ -45,7 +45,7 @@
     "build": "npm run clean && tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "prepack": "npm run build",
-    "test": "bun test tests && npm run build && node --test tests/*.test.mjs tests/core/*.test.mjs tests/fluidaudio/*.test.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs tests/core/*.test.mjs tests/fluidaudio/*.test.mjs && bun test tests",
     "check:python": "python3 -m py_compile resources/kokoro_worker.py"
   },
   "dependencies": {
