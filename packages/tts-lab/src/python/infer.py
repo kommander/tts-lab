@@ -5,7 +5,6 @@ import atexit
 import json
 import math
 import os
-import re
 import subprocess
 import shutil
 import sys
@@ -296,66 +295,7 @@ def load_kitten(assets: Path):
 QWEN_SPEAKERS = {
     "serena", "vivian", "uncle_fu", "ryan", "aiden", "ono_anna", "sohee", "eric", "dylan"
 }
-QWEN_MAX_AUDIO_TOKENS = 256
-QWEN_DIRECT_TEXT_TOKENS = 42
-QWEN_CHUNK_TEXT_TOKENS = 12
-
-
-def split_qwen_text(text: str, tokenizer, max_tokens: int = QWEN_CHUNK_TEXT_TOKENS) -> list[str]:
-    if max_tokens < 1:
-        raise ValueError("Qwen3-TTS chunk size must be positive")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines and text.strip():
-        lines = [text.strip()]
-    spans = []
-    for line in lines:
-        spans.extend(part for part in re.split(r"(?<=[.!?;:。！？；：])\s+", line) if part)
-
-    chunks = []
-    for span in spans:
-        current = ""
-        for word in span.split():
-            candidate = f"{current} {word}".strip()
-            if current and len(tokenizer.encode(candidate)) > max_tokens:
-                chunks.append(current)
-                current = word
-            else:
-                current = candidate
-        if current:
-            chunks.append(current)
-    return chunks
-
-
-def generate_qwen_segments(text: str, tokenizer, generate, seed: int, on_retry=None):
-    def complete(segment: str, segment_seed: int, depth: int = 0):
-        results = list(generate(segment, segment_seed))
-        if not results:
-            raise RuntimeError("Qwen3-TTS produced no audio")
-        if all(int(result.token_count) < QWEN_MAX_AUDIO_TOKENS for result in results):
-            return results
-        text_tokens = len(tokenizer.encode(segment))
-        target = max(1, min(QWEN_CHUNK_TEXT_TOKENS, (text_tokens + 1) // 2))
-        pieces = split_qwen_text(segment, tokenizer, target)
-        if len(pieces) < 2 or depth >= 6:
-            raise RuntimeError(
-                f"Qwen3-TTS did not emit EOS for a minimal text chunk after {QWEN_MAX_AUDIO_TOKENS} audio tokens"
-            )
-        if on_retry:
-            on_retry(len(pieces))
-        completed = []
-        for piece in pieces:
-            completed.extend(complete(piece, segment_seed, depth + 1))
-        return completed
-
-    if len(tokenizer.encode(text)) <= QWEN_DIRECT_TEXT_TOKENS:
-        return complete(text, seed)
-    pieces = split_qwen_text(text, tokenizer)
-    if on_retry:
-        on_retry(len(pieces))
-    completed = []
-    for piece in pieces:
-        completed.extend(complete(piece, seed))
-    return completed
+QWEN_MAX_AUDIO_TOKENS = 2048
 
 
 def create_qwen_model(assets: Path):
@@ -386,33 +326,24 @@ def load_qwen(assets: Path):
             raise ValueError(f"Unknown Qwen3-TTS speaker: {voice_id}")
         emit_request(request_id, "status", detail=f"Synthesizing with Qwen3-TTS {voice_id} on MLX")
         temperature = {"stable": 0.7, "expressive": 0.9}[parameters["temperature"]]
-        def generate(segment: str, segment_seed: int):
-            mx.random.seed(segment_seed)
-            return model.generate_custom_voice(
-                text=segment,
-                speaker=voice_id,
-                language="English",
-                instruct=None,
-                temperature=temperature,
-                max_tokens=QWEN_MAX_AUDIO_TOKENS,
-                top_k=50,
-                top_p=1.0,
-                repetition_penalty=1.05,
-                verbose=False,
-                stream=False,
-            )
-
-        results = generate_qwen_segments(
-            text,
-            model.tokenizer,
-            generate,
-            int(parameters["seed"]),
-            lambda count: emit_request(
-                request_id,
-                "status",
-                detail=f"Qwen3-TTS is preserving the input as {count} shorter synthesis chunks",
-            ),
-        )
+        mx.random.seed(int(parameters["seed"]))
+        results = list(model.generate_custom_voice(
+            text=text,
+            speaker=voice_id,
+            language="auto",
+            instruct=None,
+            temperature=temperature,
+            max_tokens=QWEN_MAX_AUDIO_TOKENS,
+            top_k=50,
+            top_p=1.0,
+            repetition_penalty=1.05,
+            verbose=False,
+            stream=False,
+        ))
+        if not results:
+            raise RuntimeError("Qwen3-TTS produced no audio")
+        if any(int(result.token_count) >= QWEN_MAX_AUDIO_TOKENS for result in results):
+            raise RuntimeError("Qwen3-TTS reached the 2048-token safety ceiling before emitting EOS")
         sample_rates = {int(result.sample_rate) for result in results}
         if sample_rates != {24000}:
             raise RuntimeError(f"Qwen3-TTS returned unexpected sample rates: {sorted(sample_rates)}")
