@@ -11,7 +11,15 @@ class SynthesisParameterTests(unittest.TestCase):
         self.assertEqual(infer.parse_request_parameters("kitten", {}), {"speed": 1.0})
         self.assertEqual(
             infer.parse_request_parameters("qwen", {}),
-            {"temperature": "stable", "seed": 42},
+            {
+                "language": "auto",
+                "temperature": "stable",
+                "topP": 1.0,
+                "topK": 50,
+                "repetitionPenalty": 1.05,
+                "maxTokens": 2048,
+                "seed": 42,
+            },
         )
         self.assertEqual(
             infer.parse_request_parameters("f5", {}),
@@ -20,7 +28,15 @@ class SynthesisParameterTests(unittest.TestCase):
 
     def test_enum_values_remain_strings(self):
         parameters = infer.parse_synthesis_parameters("qwen", {"temperature": "expressive", "seed": 7})
-        self.assertEqual(parameters, {"temperature": "expressive", "seed": 7})
+        self.assertEqual(parameters, {
+            "language": "auto",
+            "temperature": "expressive",
+            "topP": 1.0,
+            "topK": 50,
+            "repetitionPenalty": 1.05,
+            "maxTokens": 2048,
+            "seed": 7,
+        })
         self.assertIsInstance(parameters["temperature"], str)
 
     def test_rejects_unknown_wrong_type_range_step_and_explicit_null(self):
@@ -32,6 +48,8 @@ class SynthesisParameterTests(unittest.TestCase):
             ("qwen", {"temperature": 0.7}),
             ("qwen", {"temperature": "hot"}),
             ("qwen", {"seed": 2147483646.5}),
+            ("qwen", {"maxTokens": 513}),
+            ("qwen", {"topP": 0.93}),
             ("f5", {"nfeSteps": 15}),
         ]
         for model, parameters in invalid:
@@ -73,12 +91,23 @@ class SynthesisParameterTests(unittest.TestCase):
                 synthesize(
                     text,
                     Path("out.wav"),
-                    parameters={"temperature": "expressive", "seed": 7},
+                    parameters={
+                        "language": "english",
+                        "temperature": "expressive",
+                        "topP": 0.9,
+                        "topK": 30,
+                        "repetitionPenalty": 1.1,
+                        "maxTokens": 1024,
+                        "seed": 7,
+                    },
                 )
         self.assertEqual(seeds, [7])
         self.assertEqual(generated[0]["temperature"], 0.9)
-        self.assertEqual(generated[0]["max_tokens"], 2048)
-        self.assertEqual(generated[0]["language"], "auto")
+        self.assertEqual(generated[0]["max_tokens"], 1024)
+        self.assertEqual(generated[0]["language"], "english")
+        self.assertEqual(generated[0]["top_p"], 0.9)
+        self.assertEqual(generated[0]["top_k"], 30)
+        self.assertEqual(generated[0]["repetition_penalty"], 1.1)
         self.assertEqual(generated[0]["text"], text)
         self.assertEqual(len(generated), 1)
 

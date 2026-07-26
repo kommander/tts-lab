@@ -17,7 +17,15 @@ test("exposes runtime-specific synthesis schemas and defaults", () => {
   expect(getModelSynthesisParameterDefinitions("kokoro", "javascript-onnx-q8")[0]?.id).toBe("speed")
   expect(getDefaultModelSynthesisParameters("kitten")).toEqual({ speed: 1 })
   expect(getDefaultModelSynthesisParameters("pocket")).toEqual({ temperature: "stable", deEss: true })
-  expect(getDefaultModelSynthesisParameters("qwen")).toEqual({ temperature: "stable", seed: 42 })
+  expect(getDefaultModelSynthesisParameters("qwen")).toEqual({
+    language: "auto",
+    temperature: "stable",
+    topP: 1,
+    topK: 50,
+    repetitionPenalty: 1.05,
+    maxTokens: 2048,
+    seed: 42,
+  })
   expect(getDefaultModelSynthesisParameters("piper")).toEqual({ speed: "normal" })
   expect(getDefaultModelSynthesisParameters("melo")).toEqual({ speed: 1 })
   expect(getDefaultModelSynthesisParameters("parler")).toEqual({
@@ -39,7 +47,15 @@ test("recovers invalid persisted values independently and ignores unknown values
     temperature: "expressive",
     seed: -1,
     removedSetting: true,
-  })).toEqual({ temperature: "expressive", seed: 42 })
+  })).toEqual({
+    language: "auto",
+    temperature: "expressive",
+    topP: 1,
+    topK: 50,
+    repetitionPenalty: 1.05,
+    maxTokens: 2048,
+    seed: 42,
+  })
   expect(recoverModelSynthesisParameters("pocket", "invalid")).toEqual({
     temperature: "stable",
     deEss: true,
@@ -59,7 +75,12 @@ test("serializes normalized parameters in schema order", () => {
 
 test("normalizes model parameters with generic validation and preserves enum strings", () => {
   expect(normalizeModelSynthesisParameters("qwen", { temperature: "expressive", seed: 7 })).toEqual({
+    language: "auto",
     temperature: "expressive",
+    topP: 1,
+    topK: 50,
+    repetitionPenalty: 1.05,
+    maxTokens: 2048,
     seed: 7,
   })
   expect(normalizeModelSynthesisParameters("f5", { nfeSteps: 16 })).toEqual({
@@ -92,6 +113,10 @@ test("steps decimal numbers exactly and clamps at both bounds", () => {
   expect(stepSynthesisNumber(speed, 0.3, -1)).toBe(0.3)
   expect(stepSynthesisNumber(crossFade, 0.15, 1)).toBe(0.16)
   expect(stepSynthesisNumber(crossFade, 0.15, -1)).toBe(0.14)
+  const tokenBudget = getModelSynthesisParameterDefinitions("qwen").find(({ id }) => id === "maxTokens")
+  if (!tokenBudget || tokenBudget.type !== "number") throw new Error("Expected Qwen token budget definition")
+  expect(stepSynthesisNumber(tokenBudget, 2048, 1)).toBe(2112)
+  expect(stepSynthesisNumber(tokenBudget, 2048, -1)).toBe(1984)
 })
 
 test("toggles booleans and cycles enums in both directions", () => {

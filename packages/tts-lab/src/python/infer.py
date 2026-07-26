@@ -23,7 +23,16 @@ PARAMETER_DEFINITIONS = {
         "speed": ("number", 1.0, 0.5, 2.0, 0.05),
     },
     "qwen": {
-        "temperature": ("enum", "stable", ("stable", "expressive")),
+        "language": (
+            "enum",
+            "auto",
+            ("auto", "english", "chinese", "japanese", "korean", "german", "french", "russian", "portuguese", "spanish", "italian"),
+        ),
+        "temperature": ("enum", "stable", ("consistent", "stable", "expressive")),
+        "topP": ("number", 1.0, 0.1, 1.0, 0.05),
+        "topK": ("number", 50, 1, 100, 1),
+        "repetitionPenalty": ("number", 1.05, 1.0, 1.5, 0.05),
+        "maxTokens": ("number", 2048, 256, 4096, 64),
         "seed": ("number", 42, 0, 2147483647, 1),
     },
     "piper": {
@@ -295,9 +304,6 @@ def load_kitten(assets: Path):
 QWEN_SPEAKERS = {
     "serena", "vivian", "uncle_fu", "ryan", "aiden", "ono_anna", "sohee", "eric", "dylan"
 }
-QWEN_MAX_AUDIO_TOKENS = 2048
-
-
 def create_qwen_model(assets: Path):
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -325,25 +331,26 @@ def load_qwen(assets: Path):
         if voice_id not in QWEN_SPEAKERS:
             raise ValueError(f"Unknown Qwen3-TTS speaker: {voice_id}")
         emit_request(request_id, "status", detail=f"Synthesizing with Qwen3-TTS {voice_id} on MLX")
-        temperature = {"stable": 0.7, "expressive": 0.9}[parameters["temperature"]]
+        temperature = {"consistent": 0.5, "stable": 0.7, "expressive": 0.9}[parameters["temperature"]]
+        max_tokens = int(parameters["maxTokens"])
         mx.random.seed(int(parameters["seed"]))
         results = list(model.generate_custom_voice(
             text=text,
             speaker=voice_id,
-            language="auto",
+            language=parameters["language"],
             instruct=None,
             temperature=temperature,
-            max_tokens=QWEN_MAX_AUDIO_TOKENS,
-            top_k=50,
-            top_p=1.0,
-            repetition_penalty=1.05,
+            max_tokens=max_tokens,
+            top_k=int(parameters["topK"]),
+            top_p=parameters["topP"],
+            repetition_penalty=parameters["repetitionPenalty"],
             verbose=False,
             stream=False,
         ))
         if not results:
             raise RuntimeError("Qwen3-TTS produced no audio")
-        if any(int(result.token_count) >= QWEN_MAX_AUDIO_TOKENS for result in results):
-            raise RuntimeError("Qwen3-TTS reached the 2048-token safety ceiling before emitting EOS")
+        if any(int(result.token_count) >= max_tokens for result in results):
+            raise RuntimeError(f"Qwen3-TTS reached the {max_tokens}-token safety ceiling before emitting EOS")
         sample_rates = {int(result.sample_rate) for result in results}
         if sample_rates != {24000}:
             raise RuntimeError(f"Qwen3-TTS returned unexpected sample rates: {sorted(sample_rates)}")

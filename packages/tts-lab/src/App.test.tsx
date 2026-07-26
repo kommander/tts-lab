@@ -256,6 +256,18 @@ test("registers F4 and renders active synthesis parameters in a modal", async ()
   expect(frame).toContain("Enter apply")
 })
 
+test("renders every supported Qwen generation control", async () => {
+  renderer = await renderApp(new FakeController(), 120, 36)
+  await selectModel(3)
+  await appKeymap?.runCommand("parameters.edit.open")
+  await renderer.flush()
+  await renderer.renderOnce()
+  const frame = renderer.captureCharFrame()
+  for (const label of ["Language", "Temperature", "Top P", "Top K", "Repetition penalty", "Token budget", "Seed"]) {
+    expect(frame).toContain(label)
+  }
+})
+
 test("steps right and applies the captured model and runtime parameters", async () => {
   const controller = new FakeController()
   renderer = await renderApp(controller)

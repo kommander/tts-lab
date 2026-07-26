@@ -80,7 +80,7 @@ Press `F4` to open the selected runtime's tuning form. Use `Up`/`Down` to select
 | Kokoro | Speed `0.5–2.0` on every runtime |
 | KittenTTS | Speed `0.5–2.0` |
 | Pocket TTS | Temperature preset (`0`, `0.3`, `0.7`); de-essing toggle |
-| Qwen3-TTS | Temperature preset (`0.7`, `0.9`); deterministic seed |
+| Qwen3-TTS | Language, temperature preset (`0.5`, `0.7`, `0.9`), top-p, top-k, repetition penalty, token budget (`256–4096`), deterministic seed |
 | Piper | Slow/normal/fast presets (`0.5×`, `1×`, `2×`) mapped to each voice's native length scale |
 | MeloTTS | Speed `0.1–10.0` |
 | Parler-TTS | Speaking rate, pitch, and expression prompt choices |
@@ -93,7 +93,7 @@ Press `F4` to open the selected runtime's tuning form. Use `Up`/`Down` to select
 | Kokoro-82M | 28 English voices; PyTorch, ONNX CPU/WebGPU, or CoreML ANE | Apache-2.0 weights |
 | KittenTTS Nano | Eight English voices; 15M INT8 ONNX model on CPU | Apache-2.0 model/code; GPL-3.0+ phonemizer/eSpeak runtime |
 | Pocket TTS | Eight English CC0/CC BY voices; CoreML ANE FP16 | Apache-2.0 runtime; CC BY 4.0 model; per-voice terms |
-| Qwen3-TTS 0.6B | Nine preset voices; English MLX 4-bit profile | MIT MLX runtime; Apache-2.0 model |
+| Qwen3-TTS 0.6B | Nine preset voices; multilingual MLX 4-bit profile | MIT MLX runtime; Apache-2.0 model |
 | Piper | Three US English medium voices; CPU-first | GPL-3.0+ runtime; selected voices have non-commercial or research terms |
 | MeloTTS | Five English accents | MIT model and code |
 | Parler-TTS Mini v1.1 | 34 named, prompt-directed speakers | Apache-2.0 |

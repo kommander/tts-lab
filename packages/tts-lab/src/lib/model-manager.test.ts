@@ -157,7 +157,15 @@ test("restores v2 parameters per runtime and recovers invalid persisted values",
   `)
   expect(JSON.parse(output)).toEqual({
     initial: { speed: 1.2 },
-    qwen: { temperature: "expressive", seed: 42 },
+    qwen: {
+      language: "auto",
+      temperature: "expressive",
+      topP: 1,
+      topK: 50,
+      repetitionPenalty: 1.05,
+      maxTokens: 2048,
+      seed: 42,
+    },
     python: { speed: 1.4 },
     restored: { speed: 1.2 },
   })
