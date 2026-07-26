@@ -57,7 +57,7 @@ kokoro-js 1.2.1 commit `664c76a704021239ba59c84dcbaa4d3dece01fe9` and
 loads the 28 bundled voice tensors module-relatively in Node or Bun. Browser
 support is not provided by this package.
 
-Published contents include built JavaScript and declarations for all three exports, the Python worker, 28 voices, the complete pinned Swift package including `Package.resolved`, and all license and notice files. Generated binaries, model data, and build caches are not included.
+Packed contents include built JavaScript and declarations for all three exports, the Python worker, 28 voices, the complete pinned Swift package including `Package.resolved`, and all license and notice files. Generated binaries, model data, and build caches are not included.
 
 The package's SPDX license expression is `MIT AND Apache-2.0`: original package
 code is MIT-licensed, while the adapted files and bundled Kokoro voice assets

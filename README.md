@@ -9,14 +9,14 @@ A local workbench for installing, comparing, and actually using open text-to-spe
 - Installs Python-backed engines in isolated environments.
 - Downloads pinned model assets with resume support, progress reporting, and checksum verification.
 - Keeps one model hot for meaningful warm-inference measurements without exhausting memory.
-- Tracks per-runtime generation samples, average, median, range, and measurable process memory.
+- Tracks per-configuration generation samples, average, median, range, and measurable process memory.
 - Plays generated audio locally with a live FFT spectrum.
 - Exports the latest generated audio through a simple path dialog.
 
 ## Requirements
 
 - Bun 1.3+
-- Python 3.8+ for Python-backed runtimes; JavaScript and native profiles do not require it
+- Python 3 is required once to bootstrap uv; model-specific Python versions are installed automatically
 - Swift 6 and the Xcode command-line tools for native CoreML profiles
 - KittenTTS on macOS requires macOS 14+ on Apple Silicon; its pinned ONNX Runtime has no Intel Mac wheel
 - Qwen3-TTS requires macOS 14+ on Apple Silicon with at least 16 GB unified memory
@@ -69,7 +69,7 @@ This repository is a Bun monorepo with one lockfile and two packages:
 | `F3` | Choose the selected model runtime |
 | `F4` | Tune synthesis parameters for the selected runtime |
 | `Ctrl+R` | Retry failed setup |
-| `Escape` | Exit or close the save dialog |
+| `Escape` | Exit or close the active dialog |
 
 ## Synthesis Tuning
 
@@ -79,9 +79,9 @@ Press `F4` to open the selected runtime's tuning form. Use `Up`/`Down` to select
 |---|---|
 | Kokoro | Speed `0.5–2.0` on every runtime |
 | KittenTTS | Speed `0.5–2.0` |
-| Pocket TTS | Tested temperature preset; de-essing toggle |
-| Qwen3-TTS | Tested temperature preset; deterministic seed |
-| Piper | Tested slow/normal/fast presets mapped to each voice's native length scale |
+| Pocket TTS | Temperature preset (`0`, `0.3`, `0.7`); de-essing toggle |
+| Qwen3-TTS | Temperature preset (`0.7`, `0.9`); deterministic seed |
+| Piper | Slow/normal/fast presets (`0.5×`, `1×`, `2×`) mapped to each voice's native length scale |
 | MeloTTS | Speed `0.1–10.0` |
 | Parler-TTS | Speaking rate, pitch, and expression prompt choices |
 | F5-TTS | Speed, NFE steps, seed, crossfade, and silence removal |
@@ -111,7 +111,7 @@ Kokoro defaults to the reference Python/PyTorch runtime. Press `F3` to switch be
 - JavaScript / WebGPU FP32: experimental 326 MB profile using ONNX Runtime's native WebGPU provider; no Bun WebGPU flag required.
 - Native / CoreML ANE: experimental FluidAudio 0.15.5 sidecar for macOS 14+ on Apple Silicon; currently limited to `af_heart`.
 
-JavaScript profiles run in-process through a package-internal, Apache-2.0 Kokoro adapter with Transformers.js 4.2.0 and phonemizer 1.2.1. ONNX weights download on first use and remain cached. The CoreML profile builds its pinned Swift sidecar on first selection; first synthesis uses about 193 MiB of model/G2P assets and generates about 184 MiB of CoreML cache. Runtime choices persist in `.tts-lab/settings.json`.
+JavaScript profiles run in-process through a package-internal, Apache-2.0 Kokoro adapter with Transformers.js 4.2.0 and phonemizer 1.2.1. ONNX weights download on first use and remain cached. The CoreML profile builds its pinned Swift sidecar on first selection; first synthesis uses about 193 MiB of model/G2P assets and generates about 184 MiB of CoreML cache. Runtime and tuning choices persist in `.tts-lab/settings.json`.
 
 ### KittenTTS
 
