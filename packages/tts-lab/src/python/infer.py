@@ -28,7 +28,8 @@ PARAMETER_DEFINITIONS = {
             "auto",
             ("auto", "english", "chinese", "japanese", "korean", "german", "french", "russian", "portuguese", "spanish", "italian"),
         ),
-        "temperature": ("enum", "stable", ("consistent", "stable", "expressive")),
+        "style": ("enum", "natural", ("natural", "steady", "calm", "expressive")),
+        "temperature": ("enum", "official", ("consistent", "stable", "official")),
         "topP": ("number", 1.0, 0.1, 1.0, 0.05),
         "topK": ("number", 50, 1, 100, 1),
         "repetitionPenalty": ("number", 1.05, 1.0, 1.5, 0.05),
@@ -316,7 +317,7 @@ def load_qwen(assets: Path):
     import mlx.core as mx
     import numpy as np
 
-    emit("status", detail="Loading Qwen3-TTS 0.6B CustomVoice 4-bit on MLX")
+    emit("status", detail="Loading Qwen3-TTS 1.7B CustomVoice 8-bit on MLX")
     model = create_qwen_model(assets)
 
     def synthesize(
@@ -331,14 +332,20 @@ def load_qwen(assets: Path):
         if voice_id not in QWEN_SPEAKERS:
             raise ValueError(f"Unknown Qwen3-TTS speaker: {voice_id}")
         emit_request(request_id, "status", detail=f"Synthesizing with Qwen3-TTS {voice_id} on MLX")
-        temperature = {"consistent": 0.5, "stable": 0.7, "expressive": 0.9}[parameters["temperature"]]
+        temperature = {"consistent": 0.5, "stable": 0.7, "official": 0.9}[parameters["temperature"]]
+        instruct = {
+            "natural": None,
+            "steady": "Speak at a steady, measured pace with clear articulation, consistent tone, and no singing or laughter.",
+            "calm": "Speak calmly and clearly with an even pace and restrained emotion.",
+            "expressive": "Speak with natural emotional expression while preserving clear articulation.",
+        }[parameters["style"]]
         max_tokens = int(parameters["maxTokens"])
         mx.random.seed(int(parameters["seed"]))
         results = list(model.generate_custom_voice(
             text=text,
             speaker=voice_id,
             language=parameters["language"],
-            instruct=None,
+            instruct=instruct,
             temperature=temperature,
             max_tokens=max_tokens,
             top_k=int(parameters["topK"]),

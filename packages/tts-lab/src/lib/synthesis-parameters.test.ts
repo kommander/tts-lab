@@ -19,7 +19,8 @@ test("exposes runtime-specific synthesis schemas and defaults", () => {
   expect(getDefaultModelSynthesisParameters("pocket")).toEqual({ temperature: "stable", deEss: true })
   expect(getDefaultModelSynthesisParameters("qwen")).toEqual({
     language: "auto",
-    temperature: "stable",
+    style: "natural",
+    temperature: "official",
     topP: 1,
     topK: 50,
     repetitionPenalty: 1.05,
@@ -49,7 +50,8 @@ test("recovers invalid persisted values independently and ignores unknown values
     removedSetting: true,
   })).toEqual({
     language: "auto",
-    temperature: "expressive",
+    style: "natural",
+    temperature: "official",
     topP: 1,
     topK: 50,
     repetitionPenalty: 1.05,
@@ -74,9 +76,10 @@ test("serializes normalized parameters in schema order", () => {
 })
 
 test("normalizes model parameters with generic validation and preserves enum strings", () => {
-  expect(normalizeModelSynthesisParameters("qwen", { temperature: "expressive", seed: 7 })).toEqual({
+  expect(normalizeModelSynthesisParameters("qwen", { style: "expressive", temperature: "stable", seed: 7 })).toEqual({
     language: "auto",
-    temperature: "expressive",
+    style: "expressive",
+    temperature: "stable",
     topP: 1,
     topK: 50,
     repetitionPenalty: 1.05,

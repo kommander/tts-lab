@@ -140,7 +140,16 @@ test("restores v2 parameters per runtime and recovers invalid persisted values",
         "javascript-onnx-q8": { speed: 1.2 },
       },
       qwen: {
-        "python-mlx-4bit": { temperature: "expressive", seed: -1, unknown: true },
+        "python-mlx-4bit": {
+          language: "chinese",
+          temperature: "stable",
+          topP: 0.95,
+          topK: 40,
+          repetitionPenalty: 1.1,
+          maxTokens: 1024,
+          seed: 70,
+          unknown: true,
+        },
       },
     },
   }))
@@ -159,7 +168,8 @@ test("restores v2 parameters per runtime and recovers invalid persisted values",
     initial: { speed: 1.2 },
     qwen: {
       language: "auto",
-      temperature: "expressive",
+      style: "natural",
+      temperature: "official",
       topP: 1,
       topK: 50,
       repetitionPenalty: 1.05,
@@ -173,6 +183,17 @@ test("restores v2 parameters per runtime and recovers invalid persisted values",
   await runManager('const manager = new ModelManager(); await manager.setSynthesisParameters("kokoro", "javascript-onnx-q8", { speed: 1.3 }); await manager.dispose();')
   const saved = JSON.parse(await readFile(join(directory, "settings.json"), "utf8"))
   expect(saved.synthesisParameters.kokoro["python-pytorch-fp32"]).toEqual({ speed: 1.4 })
+  expect(saved.synthesisParameters.qwen["python-mlx-8bit"]).toEqual({
+    language: "auto",
+    style: "natural",
+    temperature: "official",
+    topP: 1,
+    topK: 50,
+    repetitionPenalty: 1.05,
+    maxTokens: 2048,
+    seed: 42,
+  })
+  expect(saved.synthesisParameters.qwen["python-mlx-4bit"]).toBeUndefined()
 })
 
 test("strict parameter writes reject stale runtimes and preserve resident workers", async () => {

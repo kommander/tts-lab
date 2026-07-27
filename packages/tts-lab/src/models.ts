@@ -66,7 +66,7 @@ const BERT_REVISION = "86b5e0934494bd15c9632b12f734a8a67f723594"
 const KITTEN_CODE_REVISION = "9f3e0d8b6600b56ebe1b4d7b6d8e1e020077d1f2"
 const KITTEN_MODEL_REVISION = "84781d74e29ee25217551556398b42f80593a813"
 const POCKET_COREML_REVISION = "1bd207828251accf30f09a965c84856cd874e9f4"
-const QWEN_MLX_REVISION = "08c72cad5e2fd0f41730c8bd1f28149585e46361"
+const QWEN_MLX_REVISION = "41d3337e8b7f2843a75841595fc14e4b9a7a4b96"
 
 const parlerSpeakerNames = [
   "Jon", "Lea", "Gary", "Jenna", "Mike", "Laura", "Lauren", "Eileen", "Alisa", "Karen", "Barbara",
@@ -131,7 +131,7 @@ const pocketVoices: VoiceDefinition[] = pocketVoiceData.map(([id, name, descript
 
 const qwenAsset = (path: string, size: number, sha256: string): ModelAsset => ({
   path,
-  url: hf("mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit", QWEN_MLX_REVISION, path),
+  url: hf("mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit", QWEN_MLX_REVISION, path),
   size,
   sha256,
 })
@@ -195,15 +195,28 @@ export const QWEN_PARAMETER_DEFINITIONS = [
     ],
   },
   {
+    id: "style",
+    label: "Style",
+    description: "1.7B instruction preset applied to the complete utterance",
+    type: "enum",
+    default: "natural",
+    options: [
+      { value: "natural", label: "Natural" },
+      { value: "steady", label: "Steady narration" },
+      { value: "calm", label: "Calm" },
+      { value: "expressive", label: "Expressive" },
+    ],
+  },
+  {
     id: "temperature",
     label: "Temperature",
     description: "Lower values are more consistent; higher values are more expressive",
     type: "enum",
-    default: "stable",
+    default: "official",
     options: [
       { value: "consistent", label: "Consistent" },
       { value: "stable", label: "Stable" },
-      { value: "expressive", label: "Expressive" },
+      { value: "official", label: "Official" },
     ],
   },
   {
@@ -239,7 +252,7 @@ export const QWEN_PARAMETER_DEFINITIONS = [
   {
     id: "maxTokens",
     label: "Token budget",
-    description: "Maximum generated audio tokens; 2048 is the documented default",
+    description: "Maximum generated audio tokens; 2048 matches official evaluation",
     type: "number",
     default: 2048,
     min: 256,
@@ -447,7 +460,7 @@ export const MODELS: readonly ModelDefinition[] = [
     id: "qwen",
     name: "Qwen3-TTS",
     tagline: "Expressive preset voices on Apple MLX",
-    footprint: "~0.9B serialized parameters · 1.58 GiB assets",
+    footprint: "1.7B parameters · 2.87 GiB assets",
     license: "MIT MLX runtime / Apache-2.0 model",
     python: "3.12",
     packages: [
@@ -496,9 +509,9 @@ export const MODELS: readonly ModelDefinition[] = [
     voices: qwenVoices,
     defaultVoiceId: "ryan",
     runtimes: [{
-      id: "python-mlx-4bit",
-      name: "Python / MLX 4-bit",
-      description: "Pinned 0.6B CustomVoice model; deterministic Apple Silicon inference",
+      id: "python-mlx-8bit",
+      name: "Python / MLX 8-bit",
+      description: "Pinned 1.7B CustomVoice quality model with instruction control",
       kind: "python",
       device: "mlx",
       platforms: ["darwin"],
@@ -508,13 +521,13 @@ export const MODELS: readonly ModelDefinition[] = [
       platformDescription: "macOS 14+ on Apple Silicon with at least 16 GB memory",
       parameters: QWEN_PARAMETER_DEFINITIONS,
     }],
-    defaultRuntimeId: "python-mlx-4bit",
-    setupVersion: "qwen3-tts-0.6b-custom-mlx-4bit-v1",
-    note: "Experimental multilingual preset-voice profile. Fixed-seed sampling is intentional; cloning and voice design are not exposed.",
+    defaultRuntimeId: "python-mlx-8bit",
+    setupVersion: "qwen3-tts-1.7b-custom-mlx-8bit-v1",
+    note: "Multilingual quality profile with nine preset voices and optional 1.7B style instructions. Fixed-seed sampling is intentional; cloning and voice design are not exposed.",
     assets: [
-      qwenAsset("config.json", 6058, "612cb591b44547319e5c68a78c0e93e4defb57882a4aa9ef5f06cc2f071ed036"),
+      qwenAsset("config.json", 6058, "43f29f9ab55cf387bd2ce1d07e9d95a5ca8974fa2fda4e2b45c13ae64aad3bfa"),
       qwenAsset("merges.txt", 1671839, "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"),
-      qwenAsset("model.safetensors", 1006772520, "4ab02a20be381700f6e73dbb5efdc424cadf9f1d0652cbffd662872ea41e296a"),
+      qwenAsset("model.safetensors", 2393308931, "b696f4bf45f54497b6de758981e76f1410bd68af05a657477dee466b0202df1a"),
       qwenAsset("speech_tokenizer/config.json", 2336, "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167"),
       qwenAsset("speech_tokenizer/model.safetensors", 682293092, "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"),
       qwenAsset("tokenizer_config.json", 7344, "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670"),

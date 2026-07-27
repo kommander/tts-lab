@@ -80,7 +80,7 @@ Press `F4` to open the selected runtime's tuning form. Use `Up`/`Down` to select
 | Kokoro | Speed `0.5–2.0` on every runtime |
 | KittenTTS | Speed `0.5–2.0` |
 | Pocket TTS | Temperature preset (`0`, `0.3`, `0.7`); de-essing toggle |
-| Qwen3-TTS | Language, temperature preset (`0.5`, `0.7`, `0.9`), top-p, top-k, repetition penalty, token budget (`256–4096`), deterministic seed |
+| Qwen3-TTS | Language, 1.7B style instruction, temperature preset (`0.5`, `0.7`, `0.9`), top-p, top-k, repetition penalty, token budget (`256–4096`), deterministic seed |
 | Piper | Slow/normal/fast presets (`0.5×`, `1×`, `2×`) mapped to each voice's native length scale |
 | MeloTTS | Speed `0.1–10.0` |
 | Parler-TTS | Speaking rate, pitch, and expression prompt choices |
@@ -93,7 +93,7 @@ Press `F4` to open the selected runtime's tuning form. Use `Up`/`Down` to select
 | Kokoro-82M | 28 English voices; PyTorch, ONNX CPU/WebGPU, or CoreML ANE | Apache-2.0 weights |
 | KittenTTS Nano | Eight English voices; 15M INT8 ONNX model on CPU | Apache-2.0 model/code; GPL-3.0+ phonemizer/eSpeak runtime |
 | Pocket TTS | Eight English CC0/CC BY voices; CoreML ANE FP16 | Apache-2.0 runtime; CC BY 4.0 model; per-voice terms |
-| Qwen3-TTS 0.6B | Nine preset voices; multilingual MLX 4-bit profile | MIT MLX runtime; Apache-2.0 model |
+| Qwen3-TTS 1.7B | Nine preset voices; multilingual MLX 8-bit quality profile | MIT MLX runtime; Apache-2.0 model |
 | Piper | Three US English medium voices; CPU-first | GPL-3.0+ runtime; selected voices have non-commercial or research terms |
 | MeloTTS | Five English accents | MIT model and code |
 | Parler-TTS Mini v1.1 | 34 named, prompt-directed speakers | Apache-2.0 |
@@ -123,7 +123,9 @@ JavaScript profiles run in-process through a package-internal, Apache-2.0 Kokoro
 
 ### Qwen3-TTS
 
-[Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) uses MLX-Audio 0.4.6 and the immutable 0.6B CustomVoice 4-bit conversion. Seven verified model files total 1.58 GiB. The initial profile exposes nine preset speakers with deterministic fixed-seed sampling, automatic language detection, single-pass style-consistent generation, and the documented 2048-codec-token budget. Output that reaches the ceiling without EOS is rejected rather than silently truncated. Voice cloning, voice design, style instructions, and unseeded generation are intentionally not exposed. Although resident RSS is about 1.9 GB on the tested M5 Max, transient MLX allocation reached about 5.7 GB, so setup requires macOS 14+ on Apple Silicon with at least 16 GB memory.
+[Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) uses MLX-Audio 0.4.6 and the immutable 1.7B CustomVoice 8-bit conversion. Seven verified model files total 2.87 GiB. This quality profile exposes all nine preset speakers, supported 1.7B style instructions, language selection, official sampling controls, deterministic fixed-seed sampling, single-pass generation, and an evaluation-aligned 2048-codec-token default budget. Output that reaches the selected ceiling without EOS is rejected rather than silently truncated. Voice cloning, voice design, and unseeded generation are intentionally not exposed.
+
+The 1.7B 8-bit profile is the measured default rather than the smaller 0.6B 4-bit conversion: for the same 446-character English passage, 1.7B produced 33–34 seconds of audio and peaked below 9 GB of MLX allocation, while 0.6B drifted to 85–108 seconds and peaked at 12–15 GB because it generated far more codec tokens. Setup requires macOS 14+ on Apple Silicon with at least 16 GB unified memory. Qwen does not implement a native speed control, and no seed is universally best; the seed exists for repeatability within this pinned runtime. Very long single-pass generation remains an upstream autoregressive limitation, so token ceilings and output review are still required for multi-minute material.
 
 Runtime statistics are session-local and separate per runtime, voice, and normalized tuning configuration. JavaScript ONNX memory is included in app RSS; Python and CoreML workers report available current and peak RSS. These are process-level values, not model-tensor estimates.
 

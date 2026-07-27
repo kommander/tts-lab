@@ -179,12 +179,12 @@ test("defines verified Kokoro runtime profiles with Python as default", () => {
   expect(pocketRuntime.assets?.every((asset) => asset.sha256 && asset.url.includes("1bd207828251accf30f09a965c84856cd874e9f4"))).toBe(true)
   expect(MODEL_BY_ID.pocket.voices.slice(1).every((voice) => voice.assets?.every((asset) => asset.sha256))).toBe(true)
   const qwenRuntime = MODEL_BY_ID.qwen.runtimes[0]!
-  expect(qwenRuntime.id).toBe("python-mlx-4bit")
+  expect(qwenRuntime.id).toBe("python-mlx-8bit")
   expect(qwenRuntime.platforms).toEqual(["darwin"])
   expect(qwenRuntime.minimumDarwinMajor).toBe(23)
   expect(qwenRuntime.minimumMemoryBytes).toBe(16 * 1024 ** 3)
-  expect(MODEL_BY_ID.qwen.assets.reduce((sum, asset) => sum + asset.size, 0)).toBe(1693530022)
-  expect(MODEL_BY_ID.qwen.assets.every((asset) => asset.sha256 && asset.url.includes("08c72cad5e2fd0f41730c8bd1f28149585e46361"))).toBe(true)
+  expect(MODEL_BY_ID.qwen.assets.reduce((sum, asset) => sum + asset.size, 0)).toBe(3080066433)
+  expect(MODEL_BY_ID.qwen.assets.every((asset) => asset.sha256 && asset.url.includes("41d3337e8b7f2843a75841595fc14e4b9a7a4b96"))).toBe(true)
   for (const model of MODELS.slice(1)) expect(model.runtimes).toHaveLength(1)
 })
 
@@ -263,7 +263,7 @@ test("renders every supported Qwen generation control", async () => {
   await renderer.flush()
   await renderer.renderOnce()
   const frame = renderer.captureCharFrame()
-  for (const label of ["Language", "Temperature", "Top P", "Top K", "Repetition penalty", "Token budget", "Seed"]) {
+  for (const label of ["Language", "Style", "Temperature", "Top P", "Top K", "Repetition penalty", "Token budget", "Seed"]) {
     expect(frame).toContain(label)
   }
 })

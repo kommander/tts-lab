@@ -13,7 +13,8 @@ class SynthesisParameterTests(unittest.TestCase):
             infer.parse_request_parameters("qwen", {}),
             {
                 "language": "auto",
-                "temperature": "stable",
+                "style": "natural",
+                "temperature": "official",
                 "topP": 1.0,
                 "topK": 50,
                 "repetitionPenalty": 1.05,
@@ -27,10 +28,11 @@ class SynthesisParameterTests(unittest.TestCase):
         )
 
     def test_enum_values_remain_strings(self):
-        parameters = infer.parse_synthesis_parameters("qwen", {"temperature": "expressive", "seed": 7})
+        parameters = infer.parse_synthesis_parameters("qwen", {"style": "expressive", "temperature": "stable", "seed": 7})
         self.assertEqual(parameters, {
             "language": "auto",
-            "temperature": "expressive",
+            "style": "expressive",
+            "temperature": "stable",
             "topP": 1.0,
             "topK": 50,
             "repetitionPenalty": 1.05,
@@ -93,7 +95,8 @@ class SynthesisParameterTests(unittest.TestCase):
                     Path("out.wav"),
                     parameters={
                         "language": "english",
-                        "temperature": "expressive",
+                        "style": "steady",
+                        "temperature": "official",
                         "topP": 0.9,
                         "topK": 30,
                         "repetitionPenalty": 1.1,
@@ -108,6 +111,7 @@ class SynthesisParameterTests(unittest.TestCase):
         self.assertEqual(generated[0]["top_p"], 0.9)
         self.assertEqual(generated[0]["top_k"], 30)
         self.assertEqual(generated[0]["repetition_penalty"], 1.1)
+        self.assertIn("steady, measured pace", generated[0]["instruct"])
         self.assertEqual(generated[0]["text"], text)
         self.assertEqual(len(generated), 1)
 
